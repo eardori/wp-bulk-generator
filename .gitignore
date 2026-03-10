@@ -1,0 +1,66 @@
+# ============================
+# OS & Editor
+# ============================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# ============================
+# Node.js / Next.js (admin/)
+# ============================
+node_modules/
+admin/.next/
+admin/out/
+admin/build/
+*.tsbuildinfo
+admin/next-env.d.ts
+
+# ============================
+# Environment & Secrets
+# ============================
+.env
+.env.*
+!.env.example
+
+# Credentials (절대 커밋 금지)
+admin/.cache/sites-credentials.json
+**/credentials*.json
+*.pem
+*.key
+
+# ============================
+# Runtime & Cache
+# ============================
+admin/.cache/
+.playwright-cli/
+*.log
+
+# ============================
+# Package managers
+# ============================
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# ============================
+# Test & Coverage
+# ============================
+coverage/
+
+# ============================
+# Vercel
+# ============================
+.vercel
+
+# ============================
+# Claude Code
+# ============================
+.claude/launch.json
