@@ -1,187 +1,73 @@
-# WP Bulk Generator - 프로젝트 가이드
+# WP Bulk Generator
 
-## 프로젝트 개요
+WordPress 사이트 대량 생성 + AI 콘텐츠 자동화 도구.
+상품 스크래핑 → 리뷰 수집 → AI 아티클 생성 → WordPress 발행까지 자동화.
 
-WordPress 사이트를 대량 생성하고, AI로 콘텐츠를 자동 생성·발행하는 도구.
-건강기능식품/영양제 리뷰 블로그 사이트를 타겟으로 한다.
+## Tech Stack
+- Next.js 16 | React 19 | TypeScript | Tailwind CSS 4
+- Google Gemini 2.0 Flash (AI 콘텐츠 생성)
+- Playwright + Cheerio (스크래핑)
+- SSH2 (원격 서버 제어)
+- WordPress REST API (콘텐츠 발행)
+- Ubuntu EC2 | Nginx | PHP 8.2 | MariaDB | WP-CLI | Redis
 
-### 핵심 기능
-- **사이트 대량 배포**: JSON 설정 기반으로 WordPress 사이트 일괄 설치 (Nginx + PHP + MariaDB)
-- **콘텐츠 생성**: AI(Gemini/Claude/OpenAI)로 제품 리뷰 아티클 자동 생성
-- **상품 스크래핑**: 쿠팡 등 쇼핑몰에서 상품 정보 + 리뷰 자동 수집 (Playwright)
-- **SEO 최적화**: 기존 콘텐츠에 대한 SEO 메타데이터 자동 최적화
-- **Admin 대시보드**: Next.js 기반 관리 UI
-
----
-
-## 폴더 구조
-
-```
-wp-bulk-generator/
-├── admin/                    # Next.js 16 관리 대시보드
-│   ├── src/
-│   │   ├── app/              # Next.js App Router 페이지
-│   │   │   ├── api/          # API Route Handlers
-│   │   │   │   ├── content/  # 콘텐츠 관련 API (생성, 발행, 스크래핑, SEO)
-│   │   │   │   ├── dashboard/
-│   │   │   │   ├── deploy-sites/
-│   │   │   │   ├── generate-configs/
-│   │   │   │   └── server-status/
-│   │   │   ├── content/      # 콘텐츠 관리 페이지
-│   │   │   ├── dashboard/    # 대시보드 페이지
-│   │   │   └── groups/       # 사이트 그룹 관리
-│   │   └── components/       # React 컴포넌트
-│   │       └── content/      # 콘텐츠 관련 컴포넌트
-│   ├── scripts/              # Admin 전용 서버 스크립트 (MJS)
-│   ├── .env.local            # 로컬 환경변수 (git 추적 안함)
-│   ├── .env.example          # 환경변수 템플릿
-│   └── package.json
-├── scripts/                  # 서버 배포/운영 쉘 스크립트
-│   ├── setup-server.sh       # VPS 초기 세팅 (Nginx, PHP, MariaDB, WP-CLI)
-│   ├── deploy-wp-sites.sh    # WordPress 사이트 대량 설치
-│   ├── backfill-existing-sites.sh
-│   ├── rebuild-admin.sh      # Admin 빌드 & 배포
-│   ├── seo-optimize.php      # WP 플러그인용 SEO 최적화
-│   ├── seo-optimize-existing.sh
-│   ├── seo-optimize-existing.mjs
-│   ├── generate-static-sitemaps.sh
-│   └── tune-wordpress-stack.sh
-├── configs/                  # 사이트 설정 파일
-│   └── sites-config.json     # 사이트 목록 및 설정 정의
-├── CLAUDE.md                 # 이 파일
-└── .gitignore
-```
-
----
-
-## 기술 스택
-
-| 영역 | 기술 |
-|------|------|
-| Admin Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4 |
-| AI 엔진 | Google Gemini, Anthropic Claude, OpenAI |
-| 스크래핑 | Playwright + Stealth Plugin, Cheerio |
-| 서버 연결 | SSH2 (Node.js에서 원격 서버 제어) |
-| WordPress 서버 | Nginx, PHP 8.2, MariaDB, WP-CLI, Redis |
-| 배포 스크립트 | Bash (Ubuntu 22.04/24.04 대상) |
-
----
-
-## 개발 환경 셋업
-
-### 1. Admin (Next.js) 실행
+## Quick Commands
 ```bash
-cd admin
-cp .env.example .env.local   # 환경변수 설정
-npm install
-npm run dev                  # http://localhost:3000
+cd admin && npm install                # 의존성 설치
+cd admin && npm run dev                # 개발 서버 (http://localhost:3000)
+cd admin && npm run build              # 프로덕션 빌드
+cd admin && npm run lint               # ESLint 검사
+./scripts/setup-server.sh              # EC2 서버 초기 세팅 (1회)
+./scripts/deploy-wp-sites.sh configs/sites-config.json  # WP 사이트 대량 배포
+./scripts/rebuild-admin.sh             # Admin 빌드 & 서버 배포
 ```
 
-### 2. 환경변수 (.env.local)
-`admin/.env.example` 참조. 실제 API 키와 SSH 설정 값은 팀원에게 별도 공유.
+## Member System
+IMPORTANT: 새 세션 시작 시 반드시 "나는 {이름}이야"로 역할을 선언할 것.
+역할 미선언 시 Claude는 아래 질문으로 역할 확인을 먼저 진행해야 함:
 
-### 3. SSH 키 설정
-서버 접속용 PEM 키를 로컬에 저장 후, `.env.local`의 `SSH_KEY_PATH`에 경로 지정.
+> "안녕하세요! 작업을 시작하기 전에 역할을 확인하겠습니다.
+> Justin(FE), Kevin(BE), Hoon(PM) 중 누구신가요?"
 
----
+역할 선언 후 해당 멤버 파일(@docs/members/{name}.md)을 읽고 권한/지침을 적용.
+역할 확인 후 Quick Guide를 자동 출력. 이후 "가이드", "도움말" 등으로 재확인 가능.
+각 멤버는 자신의 역할 파일을 자연어로 수정 가능 ("내 역할 수정해줘", "체크리스트 추가해줘" 등).
+상세: @docs/members/README.md | @.claude/rules/09-onboarding.md | @.claude/rules/10-member-self-edit.md
 
-## 공동작업 규칙
+## Rules Index (`.claude/rules/`)
+| File | 내용 |
+|------|------|
+| 01-architecture.md | Next.js App Router, API route 구조, 스트리밍 패턴, 콘텐츠 파이프라인 |
+| 02-code-style.md | TypeScript/React 네이밍, Tailwind, Shell Script 규칙 |
+| 03-git-workflow.md | 브랜치 전략, 커밋 메시지, PR 규칙 |
+| 04-environment.md | 환경변수, SSH 키, 시크릿 관리 |
+| 05-documentation.md | 문서 작성 규칙, CHANGELOG, 변경 이력 기록 |
+| 06-frontend.md | React 컴포넌트, 페이지, 상태 관리, UI 패턴 |
+| 07-backend.md | API route, 스크래핑, AI 생성, WordPress API |
+| 08-scripts.md | 서버 배포 스크립트, 실행 환경, 승인 프로세스 |
+| 09-onboarding.md | 세션 시작 온보딩, 역할 선언, Quick Guide |
+| 10-member-self-edit.md | 멤버 파일 자연어 수정 규칙 |
+| 11-collaboration.md | 요청 보드, 기능 대시보드, 세션 종료 요약, ADR |
 
-### Git 컨벤션
+## Docs Index (`docs/`)
+| Folder | 용도 | 관리자 |
+|--------|------|--------|
+| members/ | 멤버별 역할, 권한, 체크리스트 | All |
+| architecture/ | 시스템 아키텍처, API 레퍼런스, 파이프라인 | Kevin |
+| scraping/ | 스크래핑 엔진 가이드 | Kevin |
+| deployment/ | 서버 세팅, 사이트 배포 가이드 | Kevin |
+| features/ | AI 생성, 페르소나, SEO 등 기능 문서 | All |
+| tasks/ | 멤버 간 요청 보드 (inbox별 추적) | All |
+| decisions/ | 의사결정 기록 (ADR) | All |
+| status.md | 기능별 진행 현황 대시보드 | All |
+| CHANGELOG.md | 변경 이력 | All |
 
-#### 브랜치 전략
-- `main`: 안정 버전. 직접 push 금지, PR을 통해서만 머지
-- `feature/<기능명>`: 새 기능 개발
-- `fix/<이슈>`: 버그 수정
-- `script/<스크립트명>`: 서버 스크립트 변경
-
-#### 커밋 메시지
-```
-<type>: <설명 (한국어 OK)>
-
-# 예시
-feat: 콘텐츠 SEO 최적화 API 추가
-fix: 스크래핑 시 타임아웃 오류 수정
-script: deploy-wp-sites.sh 인증서 갱신 로직 추가
-chore: 불필요한 로그 파일 정리
-```
-
-**Type 종류**: `feat`, `fix`, `refactor`, `script`, `style`, `chore`, `docs`
-
-### 코드 스타일
-
-#### TypeScript (admin/)
-- **파일 네이밍**: 컴포넌트는 PascalCase (`SiteSelector.tsx`), API route는 Next.js 컨벤션 (`route.ts`)
-- **타입**: `type` 키워드 사용 (`interface` 대신). 타입 정의는 해당 feature 폴더의 `types.ts`에 모아둠
-- **import**: `@/` alias 사용 (= `src/`)
-- **스타일**: Tailwind CSS 유틸리티 클래스 사용, 별도 CSS 파일 지양
-
-#### Shell Scripts (scripts/)
-- 첫 줄: `#!/bin/bash`
-- `set -euo pipefail` 반드시 포함
-- 한국어 주석 허용
-- 변수명: `UPPER_SNAKE_CASE`
-- 에러 처리와 로그 출력 필수
-
-### 시크릿 관리
-
-**절대 커밋 금지 항목:**
-- `.env`, `.env.local` (API 키, SSH 정보)
-- `sites-credentials.json` (WP 비밀번호, DB 비밀번호)
-- `*.pem`, `*.key` (SSH 키)
+## Critical Rules (반드시 준수)
+- `.env`, `.env.local`, `*.pem`, `credentials*.json` 절대 커밋 금지
 - 서버 IP 주소를 소스코드에 하드코딩하지 말 것
-
-시크릿은 `.env.local` 파일을 통해 로컬 관리하고, 팀원 간 안전한 채널로 공유.
-
-### API Route 작성 규칙
-- `admin/src/app/api/` 아래에 Next.js Route Handler 패턴 사용
-- 스트리밍 응답이 필요한 경우 `ReadableStream` + `TextEncoder` 패턴 사용
-- 에러 응답은 적절한 HTTP 상태 코드와 JSON 메시지 반환
-
-### 새 사이트 추가
-1. `configs/sites-config.json`에 사이트 설정 추가
-2. Admin 대시보드에서 "Generate Configs" → "Deploy Sites" 실행
-3. credentials는 서버에서 자동 생성됨 (admin/.cache/에 캐시)
-
----
-
-## 주요 API 엔드포인트 (admin)
-
-| 경로 | 기능 |
-|------|------|
-| `POST /api/generate-configs` | sites-config.json 기반 WP 설정 생성 |
-| `POST /api/deploy-sites` | SSH로 서버에 WP 사이트 일괄 배포 |
-| `GET /api/server-status` | 서버 상태 확인 |
-| `GET /api/dashboard` | 대시보드 데이터 조회 |
-| `POST /api/content/scrape-product` | 상품 URL에서 정보 스크래핑 |
-| `POST /api/content/fetch-reviews` | 상품 리뷰 수집 |
-| `POST /api/content/generate-articles` | AI 아티클 생성 |
-| `POST /api/content/publish-articles` | WordPress에 아티클 발행 |
-| `POST /api/content/seo-optimize` | SEO 메타데이터 최적화 |
-| `GET /api/content/fetch-sites` | 배포된 사이트 목록 조회 |
-| `POST /api/content/site-groups` | 사이트 그룹 관리 |
-
----
-
-## 서버 스크립트 (scripts/)
-
-서버 스크립트는 **Ubuntu 22.04/24.04 EC2** 에서 실행됨.
-로컬에서 직접 실행하지 않고, Admin 대시보드의 SSH 기능을 통해 원격 실행하거나,
-SSH로 서버에 접속하여 실행.
-
-```bash
-# 서버 초기 세팅 (1회)
-./scripts/setup-server.sh
-
-# WordPress 사이트 대량 배포
-./scripts/deploy-wp-sites.sh configs/sites-config.json
-```
-
----
-
-## 주의사항
-
-- admin/ 내부의 `node_modules/`는 커밋하지 않음 (npm install로 복원)
-- Playwright 브라우저는 첫 실행 시 자동 설치됨
-- 서버 스크립트는 root 권한이 필요함 (sudo)
-- `.cache/` 디렉토리는 런타임 캐시이므로 git에 포함하지 않음
+- 서버 스크립트(`scripts/`) 수정은 Hoon 승인 후 진행
+- API route 작성 시 SSE 스트리밍 패턴 준수 (`ReadableStream` + `TextEncoder`)
+- IMPORTANT: 문서(`docs/**/*.md`) 작성/수정 시 파일 하단 변경 이력에 작성자와 AI 에이전트 사용 여부를 반드시 기록
+  - 형식: `| 날짜 | 작성자 | 도구 | 변경 내용 |`
+  - 도구: `Claude Code`, `직접 작성`, `GitHub Copilot` 등
+  - 상세: @.claude/rules/05-documentation.md
