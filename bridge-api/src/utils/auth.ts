@@ -4,11 +4,15 @@ import type { FastifyRequest, FastifyReply } from "fastify";
 const API_KEY = process.env.BRIDGE_API_KEY || "";
 const JWT_SECRET = process.env.BRIDGE_JWT_SECRET || "";
 
+const PUBLIC_PATHS = ["/health"];
+
 export function verifyApiKey(
   req: FastifyRequest,
   reply: FastifyReply,
   done: (err?: Error) => void
 ) {
+  if (PUBLIC_PATHS.includes(req.url.split("?")[0])) return done();
+
   const key = req.headers["x-bridge-api-key"];
   if (key === API_KEY) return done();
 
