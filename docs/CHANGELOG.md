@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-03-11: Vercel 배포 성공 + EC2 인프라 설정 대기
+- **Vercel 배포 성공**: Root Directory=admin 설정, 환경변수 설정 완료
+- **EC2 인프라 남은 작업**:
+  - DNS A 레코드: `bridge.allmyreview.site → 108.129.225.228`
+  - SSL 인증서: certbot으로 bridge 도메인 추가
+  - Nginx 리버스 프록시: bridge-api 사이트 설정
+  - Git clone + Bridge API npm install/build + PM2 등록
+  - Vercel 환경변수에 BRIDGE_API_KEY/JWT_SECRET 추가
+- **생성된 시크릿**: BRIDGE_API_KEY, BRIDGE_JWT_SECRET (Vercel + EC2 .env에 설정 필요)
+
 ## 2026-03-11: Vercel 마이그레이션 + Bridge API 구축
 - **Bridge API** (`bridge-api/`): EC2 Fastify 서버 구축 (17개 엔드포인트)
   - 장시간 작업 위임: generate-articles, publish-articles, seo-optimize, deploy 등
@@ -40,3 +50,4 @@
 |------|--------|------|-----------|
 | 2026-03-10 | - | Claude Code | CHANGELOG 초안 작성 |
 | 2026-03-11 | Kevin | Claude Code | CI/CD + Vercel 마이그레이션 + Bridge API 기록 추가 |
+| 2026-03-11 | Kevin | Claude Code | Vercel 배포 성공 + EC2 인프라 대기 상태 기록 |

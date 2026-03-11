@@ -22,8 +22,8 @@
 | 멤버 시스템 | ✅ 완료 | Hoon | 역할 기반 접근 제어 |
 | 문서 체계 | ✅ 완료 | Hoon | CLAUDE.md + rules + docs 구조 |
 | CI/CD | ✅ 완료 | Kevin | GitHub Actions: PR 검증 + Vercel 자동 배포 + Bridge API EC2 배포 |
-| Vercel 마이그레이션 | 🔧 진행 중 | Kevin | Next.js → Vercel Free, 장시간 작업 → EC2 Bridge API |
-| Bridge API | 🔧 진행 중 | Kevin | EC2 Fastify 서버 (17개 엔드포인트, JWT 인증) |
+| Vercel 마이그레이션 | 🔧 코드 완료 | Kevin | 코드 커밋 완료, Vercel 배포 성공. EC2 Bridge API 인프라 설정 남음 |
+| Bridge API | 🔧 코드 완료 | Kevin | 코드 커밋 완료 (17개 엔드포인트). EC2 배포 대기 (DNS/SSL/Nginx/PM2) |
 | Oracle Cloud 이전 | ⏸️ 보류 | - | Vercel 완료 후 WP+Bridge를 Oracle Cloud로 이전 검토 |
 | 테스트 | ❌ 미구현 | - | 추후 테스트 프레임워크 도입 예정 |
 
@@ -40,3 +40,4 @@
 | 2026-03-10 | - | Claude Code | 기능 대시보드 초안 작성 |
 | 2026-03-11 | Kevin | Claude Code | CI/CD 완료 상태 업데이트 |
 | 2026-03-11 | Kevin | Claude Code | Vercel 마이그레이션, Bridge API, Oracle Cloud 항목 추가 |
+| 2026-03-11 | Kevin | Claude Code | Vercel/Bridge 코드 완료 상태 업데이트, EC2 인프라 설정 남음 기록 |
