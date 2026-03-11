@@ -22,7 +22,7 @@ export function verifyApiKey(
   if (jwtToken) {
     try {
       const decoded = jwt.verify(jwtToken, JWT_SECRET);
-      (req as Record<string, unknown>).bridgeUser = decoded;
+      (req as unknown as Record<string, unknown>).bridgeUser = decoded;
       return done();
     } catch {
       reply.code(401).send({ error: "Invalid token" });
@@ -34,7 +34,7 @@ export function verifyApiKey(
 }
 
 export function signToken(payload: object, expiresIn = "15m"): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn } as jwt.SignOptions);
 }
 
 export function verifyToken(token: string) {

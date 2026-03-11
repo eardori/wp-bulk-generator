@@ -141,7 +141,7 @@ function buildPrompt(
   totalCount: number,
   koPercent: number,
   enPercent: number,
-  isSubdomain: boolean | string,
+  isSubdomain: boolean,
   base_domain: string,
   domainSuffix: string,
   domainExample: string,
@@ -184,7 +184,7 @@ JSON 배열만 출력 (마크다운/설명 없이):
 
 function normalizeConfigs(
   configs: Record<string, unknown>[],
-  isSubdomain: boolean | string,
+  isSubdomain: boolean,
   base_domain: string,
   domainSuffix: string,
   reservedSlugs: Set<string>
@@ -217,7 +217,7 @@ export async function generateConfigsRoutes(app: FastifyInstance) {
     const { niche, count, language_ratio, domain_mode, base_domain, domain_suffix } =
       req.body as Record<string, unknown>;
 
-    const isSubdomain = domain_mode === "subdomain" && base_domain;
+    const isSubdomain = domain_mode === "subdomain" && !!base_domain;
     const domainSuffix = (domain_suffix as string) || ".site";
     const totalCount = Number(count) || 5;
     const langRatio = language_ratio as { ko?: number; en?: number } | undefined;
