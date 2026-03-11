@@ -1,0 +1,136 @@
+import { exec, execSync } from "child_process";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import type { FastifyInstance } from "fastify";
+import { setupSSE } from "../utils/sse.js";
+
+const CREDS_PATH =
+  process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
+const DEPLOY_SCRIPT =
+  process.env.DEPLOY_SCRIPT_PATH || "/home/ubuntu/wp-bulk-generator/scripts/deploy-wp-sites.sh";
+
+type DeployConfig = {
+  site_slug?: string;
+  domain?: string;
+};
+
+function normalizeSlug(v: string | undefined) {
+  return (v || "").trim().toLowerCase();
+}
+
+function normalizeDomain(v: string | undefined) {
+  return (v || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+}
+
+function findDuplicates(configs: DeployConfig[]): string[] {
+  const seenSlugs = new Set<string>();
+  const seenDomains = new Set<string>();
+  const dups = new Set<string>();
+  for (const c of configs) {
+    const s = normalizeSlug(c.site_slug);
+    const d = normalizeDomain(c.domain);
+    if (s) { if (seenSlugs.has(s)) dups.add(`slug:${s}`); seenSlugs.add(s); }
+    if (d) { if (seenDomains.has(d)) dups.add(`domain:${d}`); seenDomains.add(d); }
+  }
+  return Array.from(dups);
+}
+
+function readExistingSites(): DeployConfig[] {
+  try {
+    if (existsSync(CREDS_PATH)) {
+      return JSON.parse(readFileSync(CREDS_PATH, "utf-8"));
+    }
+    const raw = execSync(`sudo cat ${CREDS_PATH}`, { timeout: 10000 }).toString();
+    return JSON.parse(raw);
+  } catch { return []; }
+}
+
+export async function deployRoutes(app: FastifyInstance) {
+  app.post("/deploy", async (req, reply) => {
+    const { configs } = req.body as { configs: DeployConfig[] };
+
+    if (!configs?.length) {
+      reply.code(400).send({ error: "configs 배열이 필요합니다." });
+      return;
+    }
+
+    // 중복 검사
+    const requestDups = findDuplicates(configs);
+    if (requestDups.length > 0) {
+      reply.code(400).send({ error: `중복: ${requestDups.join(", ")}` });
+      return;
+    }
+
+    // 기존 사이트 충돌 검사
+    const existing = readExistingSites();
+    const existingSlugs = new Set(existing.map((s) => normalizeSlug(s.site_slug)).filter(Boolean));
+    const conflicts: string[] = [];
+    for (const c of configs) {
+      const s = normalizeSlug(c.site_slug);
+      if (s && existingSlugs.has(s)) conflicts.push(s);
+    }
+    if (conflicts.length > 0) {
+      reply.code(409).send({ error: `이미 존재하는 사이트: ${conflicts.join(", ")}` });
+      return;
+    }
+
+    const { send, close } = setupSSE(reply);
+
+    try {
+      // 임시 설정 파일 작성
+      const tmpConfig = `/tmp/sites-config-deploy-${Date.now()}.json`;
+      writeFileSync(tmpConfig, JSON.stringify(configs, null, 2));
+
+      send({ type: "progress", message: "배포 스크립트 실행 시작..." });
+
+      // 배포 스크립트 실행 (stdout/stderr 실시간 스트리밍)
+      const child = exec(`sudo bash ${DEPLOY_SCRIPT} ${tmpConfig}`, {
+        timeout: 600000,
+        maxBuffer: 50 * 1024 * 1024,
+      });
+
+      child.stdout?.on("data", (data: string) => {
+        const lines = data.split("\n").filter(Boolean);
+        for (const line of lines) {
+          send({ type: "log", message: line });
+        }
+      });
+
+      child.stderr?.on("data", (data: string) => {
+        const lines = data.split("\n").filter(Boolean);
+        for (const line of lines) {
+          send({ type: "log", message: `[stderr] ${line}` });
+        }
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        child.on("close", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`배포 스크립트 종료 코드: ${code}`));
+        });
+        child.on("error", reject);
+      });
+
+      // 배포 후 credentials 읽기
+      let credentials: unknown[] = [];
+      try {
+        const raw = execSync(`sudo cat ${CREDS_PATH}`, { timeout: 10000 }).toString();
+        credentials = JSON.parse(raw);
+      } catch { /* ignore */ }
+
+      // .cache에도 동기화
+      const cacheDir = "/home/ubuntu/wp-bulk-generator/admin/.cache";
+      if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
+      try {
+        writeFileSync(`${cacheDir}/sites-credentials.json`, JSON.stringify(credentials, null, 2));
+        writeFileSync(`${cacheDir}/sites-config.json`, JSON.stringify([...existing, ...configs], null, 2));
+      } catch { /* ignore */ }
+
+      send({ type: "credentials", credentials });
+      send({ type: "done", message: "배포 완료" });
+    } catch (err) {
+      send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      close();
+    }
+  });
+}

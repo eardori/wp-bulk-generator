@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { bridgeSSE, readSSEStream } from "@/lib/bridge-sse";
 import type { SiteConfig, DeployStatus } from "@/app/page";
 
 const NICHE_PRESETS = [
@@ -60,10 +61,9 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
     const accumulatedConfigs: SiteConfig[] = [];
 
     try {
-      const res = await fetch("/api/generate-configs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const { reader } = await bridgeSSE({
+        vercelEndpoint: "/api/generate-configs",
+        body: {
           niche: niche.trim(),
           count,
           language_ratio: { ko: koRatio / 100, en: (100 - koRatio) / 100 },
@@ -73,72 +73,42 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
               ? baseDomain.trim().replace(/^https?:\/\//, "").replace(/\/$/, "")
               : undefined,
           domain_suffix: domainMode === "individual" ? domainSuffix : undefined,
-        }),
+        },
       });
 
-      if (!res.ok || !res.body) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error((errData as { error?: string }).error || "AI 설정 생성 실패");
-      }
+      await readSSEStream(reader, (event) => {
+        const type = event.type as string;
 
-      // Read SSE stream
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() ?? "";
-
-        for (const chunk of lines) {
-          const line = chunk.replace(/^data: /, "").trim();
-          if (!line) continue;
-
-          let event: Record<string, unknown>;
-          try {
-            event = JSON.parse(line);
-          } catch {
-            continue;
-          }
-
-          const type = event.type as string;
-
-          if (type === "start") {
-            setTotalBatches(event.totalBatches as number);
-          } else if (type === "progress") {
-            setProgressMsg(event.message as string);
-          } else if (type === "batch") {
-            const newConfigs = event.configs as SiteConfig[];
-            accumulatedConfigs.push(...newConfigs);
-            const c = event.collected as number;
-            const tb = event.totalBatches as number;
-            const bi = (event.batchIndex as number) + 1;
-            setCollected(c);
-            setDoneBatches(bi);
-            setTotalBatches(tb);
-            setProgressMsg(`✅ 배치 ${bi}/${tb} 완료 — ${c}개 누적`);
-            // Send partial results immediately so UI updates
-            onGenerated([...accumulatedConfigs]);
-          } else if (type === "batch_error") {
-            const c = event.collected as number;
-            const tb = event.totalBatches as number;
-            const bi = (event.batchIndex as number) + 1;
-            setPartialWarning(
-              `⚠️ 배치 ${bi}/${tb}에서 중단됨 — ${c}개 저장됨. 아래 버튼으로 이어서 생성하세요.`
-            );
-            setProgressMsg("");
-          } else if (type === "done") {
-            const total = event.total as number;
-            setProgressMsg(`🎉 완료! 총 ${total}개 생성됨`);
-          } else if (type === "error") {
-            throw new Error(event.message as string);
-          }
+        if (type === "start") {
+          setTotalBatches(event.totalBatches as number);
+        } else if (type === "progress") {
+          setProgressMsg(event.message as string);
+        } else if (type === "batch") {
+          const newConfigs = event.configs as SiteConfig[];
+          accumulatedConfigs.push(...newConfigs);
+          const c = event.collected as number;
+          const tb = event.totalBatches as number;
+          const bi = (event.batchIndex as number) + 1;
+          setCollected(c);
+          setDoneBatches(bi);
+          setTotalBatches(tb);
+          setProgressMsg(`✅ 배치 ${bi}/${tb} 완료 — ${c}개 누적`);
+          onGenerated([...accumulatedConfigs]);
+        } else if (type === "batch_error") {
+          const c = event.collected as number;
+          const tb = event.totalBatches as number;
+          const bi = (event.batchIndex as number) + 1;
+          setPartialWarning(
+            `⚠️ 배치 ${bi}/${tb}에서 중단됨 — ${c}개 저장됨. 아래 버튼으로 이어서 생성하세요.`
+          );
+          setProgressMsg("");
+        } else if (type === "done") {
+          const total = event.total as number;
+          setProgressMsg(`🎉 완료! 총 ${total}개 생성됨`);
+        } else if (type === "error") {
+          throw new Error(event.message as string);
         }
-      }
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "알 수 없는 오류";
       setError(msg);
@@ -287,7 +257,7 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
                   <span className="text-yellow-400">호스트:</span>{" "}
                   <span className="text-emerald-300">*</span> &nbsp;
                   <span className="text-yellow-400">값:</span>{" "}
-                  <span className="text-emerald-300">108.129.225.228</span>
+                  <span className="text-emerald-300">{"{서버 IP}"}</span>
                 </div>
               </div>
               {baseDomain && (

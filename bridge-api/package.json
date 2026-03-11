@@ -1,0 +1,26 @@
+{
+  "name": "wp-bridge-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.0",
+    "@google/generative-ai": "^0.24.1",
+    "cheerio": "^1.2.0",
+    "fastify": "^5.2.0",
+    "jsonwebtoken": "^9.0.2",
+    "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.9",
+    "@types/node": "^20",
+    "tsx": "^4.19.0",
+    "typescript": "^5"
+  }
+}

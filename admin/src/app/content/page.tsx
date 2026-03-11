@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { bridgeSSE, readSSEStream } from "@/lib/bridge-sse";
 import type {
   ContentStep,
   ContentArticleConfig,
@@ -127,44 +128,26 @@ export default function ContentPage() {
     setReviewDebugLog([]);
 
     try {
-      const res = await fetch("/api/content/fetch-reviews", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reviewApiParams: product.reviewApiParams }),
+      const { reader } = await bridgeSSE({
+        vercelEndpoint: "/api/content/fetch-reviews",
+        body: { reviewApiParams: product.reviewApiParams },
       });
 
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      if (!reader) throw new Error("Stream not available");
-
       const allReviews: ProductReview[] = [];
-      let buffer = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === "progress") {
-              setReviewProgress({ page: data.page || 0, total: data.total || 5, message: data.message });
-            } else if (data.type === "reviews") {
-              allReviews.push(...(data.reviews || []));
-            } else if (data.type === "done") {
-              setReviewCollection(data.collection);
-              setStep("reviews-ready");
-            } else if (data.type === "error") {
-              // 리뷰 수집 중 오류 — 진단 로그에 누적 (로딩 후에도 표시됨)
-              setReviewDebugLog((prev) => [...prev, data.message]);
-              setLog((prev) => [...prev, `리뷰 수집 오류: ${data.message}`]);
-            }
-          } catch { /* skip malformed chunk */ }
+      await readSSEStream(reader, (data) => {
+        if (data.type === "progress") {
+          setReviewProgress({ page: (data.page as number) || 0, total: (data.total as number) || 5, message: data.message as string });
+        } else if (data.type === "reviews") {
+          allReviews.push(...((data.reviews as ProductReview[]) || []));
+        } else if (data.type === "done") {
+          setReviewCollection(data.collection as ReviewCollection);
+          setStep("reviews-ready");
+        } else if (data.type === "error") {
+          setReviewDebugLog((prev) => [...prev, data.message as string]);
+          setLog((prev) => [...prev, `리뷰 수집 오류: ${data.message}`]);
         }
-      }
+      });
 
       if (allReviews.length > 0) {
         setStep("reviews-ready");
@@ -190,37 +173,22 @@ export default function ContentPage() {
     });
   };
 
-  // SSE 스트림 읽기 헬퍼
-  const readStream = async (
-    res: Response,
+  // SSE 스트림 읽기 헬퍼 (bridge 직접 연결용)
+  const readArticleStream = async (
+    reader: ReadableStreamDefaultReader<Uint8Array>,
     totalArticles: number,
     onArticle: (a: GeneratedArticle) => void,
   ) => {
-    const reader = res.body?.getReader();
-    const decoder = new TextDecoder();
-    if (!reader) return;
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        try {
-          const data = JSON.parse(line.slice(6));
-          if (data.type === "progress") {
-            setGenProgress({ current: data.current ?? 0, total: data.total ?? totalArticles });
-            setLog((prev) => [...prev, data.message]);
-          } else if (data.type === "article") {
-            onArticle(data.article);
-          } else if (data.type === "error") {
-            setLog((prev) => [...prev, `⚠ ${data.message}`]);
-          }
-        } catch { /* skip */ }
+    await readSSEStream(reader, (data) => {
+      if (data.type === "progress") {
+        setGenProgress({ current: (data.current as number) ?? 0, total: (data.total as number) ?? totalArticles });
+        setLog((prev) => [...prev, data.message as string]);
+      } else if (data.type === "article") {
+        onArticle(data.article as GeneratedArticle);
+      } else if (data.type === "error") {
+        setLog((prev) => [...prev, `⚠ ${data.message}`]);
       }
-    }
+    });
   };
 
   // 핵심 생성 로직 — startOffset으로 이어서 생성 지원
@@ -249,12 +217,11 @@ export default function ContentPage() {
           `── 배치 ${offset + 1}~${offset + batchLimit} / ${totalArticles} 처리 중...`,
         ]);
 
-        let res: Response;
+        let reader: ReadableStreamDefaultReader<Uint8Array>;
         try {
-          res = await fetch("/api/content/generate-articles", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+          const result = await bridgeSSE({
+            vercelEndpoint: "/api/content/generate-articles",
+            body: {
               product,
               targetQuestions: questions,
               siteConfigs,
@@ -262,8 +229,9 @@ export default function ContentPage() {
               offset,
               limit: batchLimit,
               globalTotal: totalArticles,
-            }),
+            },
           });
+          reader = result.reader;
         } catch (fetchErr) {
           setLog((prev) => [...prev, `⚠ 네트워크 오류 (배치 ${offset + 1}): ${fetchErr} — 재시도 중...`]);
           await new Promise((r) => setTimeout(r, 5000));
@@ -271,12 +239,7 @@ export default function ContentPage() {
           continue;
         }
 
-        if (!res.ok) {
-          setLog((prev) => [...prev, `⚠ 배치 ${offset + 1} API 오류 (${res.status}) — 건너뜀`]);
-          continue;
-        }
-
-        await readStream(res, totalArticles, (article) => {
+        await readArticleStream(reader, totalArticles, (article) => {
           collectedArticles.push(article);
           setArticles([...collectedArticles]);
         });
@@ -334,74 +297,57 @@ export default function ContentPage() {
     setLog((prev) => [...prev, "WordPress 발행 시작..."]);
 
     try {
-      const res = await fetch("/api/content/publish-articles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ articles: toPublish, sites: selectedSites }),
+      const { reader } = await bridgeSSE({
+        vercelEndpoint: "/api/content/publish-articles",
+        body: { articles: toPublish, sites: selectedSites },
       });
 
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      if (!reader) throw new Error("Stream not available");
-
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === "progress") {
-              setPubProgress((prev) => ({
-                current: data.current ?? prev.current,
-                total: data.total ?? prev.total,
-              }));
-              setLog((prev) => [...prev, data.message]);
-              if (data.articleId) {
-                setArticles((prev) =>
-                  prev.map((a) =>
-                    a.id === data.articleId
-                      ? { ...a, status: "publishing" as const, error: undefined }
-                      : a
-                  )
-                );
-              }
-            } else if (data.type === "published") {
-              setArticles((prev) =>
-                prev.map((a) =>
-                  a.id === data.articleId
-                    ? {
-                        ...a,
-                        status: "published" as const,
-                        publishedUrl: data.postUrl,
-                        publishedPostId: data.postId,
-                        error: undefined,
-                      }
-                    : a
-                )
-              );
-            } else if (data.type === "done") {
-              setStep("done");
-            } else if (data.type === "error") {
-              setLog((prev) => [...prev, `오류 [${data.siteSlug || "publish"}]: ${data.message}`]);
-              if (data.articleId) {
-                setArticles((prev) =>
-                  prev.map((a) =>
-                    a.id === data.articleId
-                      ? { ...a, status: "error" as const, error: data.message }
-                      : a
-                  )
-                );
-              }
-            }
-          } catch { /* skip malformed chunk */ }
+      await readSSEStream(reader, (data) => {
+        if (data.type === "progress") {
+          setPubProgress((prev) => ({
+            current: (data.current as number) ?? prev.current,
+            total: (data.total as number) ?? prev.total,
+          }));
+          setLog((prev) => [...prev, data.message as string]);
+          if (data.articleId) {
+            setArticles((prev) =>
+              prev.map((a) =>
+                a.id === data.articleId
+                  ? { ...a, status: "publishing" as const, error: undefined }
+                  : a
+              )
+            );
+          }
+        } else if (data.type === "published") {
+          setArticles((prev) =>
+            prev.map((a) =>
+              a.id === data.articleId
+                ? {
+                    ...a,
+                    status: "published" as const,
+                    publishedUrl: data.postUrl as string,
+                    publishedPostId: data.postId as number,
+                    error: undefined,
+                  }
+                : a
+            )
+          );
+        } else if (data.type === "done") {
+          setStep("done");
+        } else if (data.type === "error") {
+          setLog((prev) => [...prev, `오류 [${data.siteSlug || "publish"}]: ${data.message}`]);
+          if (data.articleId) {
+            setArticles((prev) =>
+              prev.map((a) =>
+                a.id === data.articleId
+                  ? { ...a, status: "error" as const, error: data.message as string }
+                  : a
+              )
+            );
+          }
         }
-      }
+      });
+
       if (step !== "done") setStep("done");
     } catch (err) {
       setLog((prev) => [...prev, `오류: ${err}`]);

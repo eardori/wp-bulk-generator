@@ -1,18 +1,17 @@
-name: Deploy
+name: Deploy Bridge API
 
 on:
   push:
     branches: [main]
     paths:
-      - 'admin/**'
-      - 'scripts/rebuild-admin.sh'
-      - '.github/workflows/deploy.yml'
+      - 'bridge-api/**'
+      - '.github/workflows/deploy-bridge.yml'
 
   workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy to EC2
+    name: Deploy Bridge API to EC2
     runs-on: ubuntu-latest
 
     steps:
@@ -31,23 +30,25 @@ jobs:
             StrictHostKeyChecking no
           EOF
 
-      - name: Pull latest code on server
+      - name: Pull & build Bridge API
         run: |
           ssh deploy-server << 'ENDSSH'
             cd /home/ubuntu/wp-bulk-generator
             git fetch origin main
             git reset --hard origin/main
-            cd admin && npm ci
+            cd bridge-api
+            npm ci --production
+            npm run build
           ENDSSH
 
-      - name: Build & restart
+      - name: Restart Bridge API
         run: |
           ssh deploy-server << 'ENDSSH'
-            cd /home/ubuntu/wp-bulk-generator
-            bash scripts/rebuild-admin.sh
+            pm2 restart wp-bridge-api || pm2 start /home/ubuntu/wp-bulk-generator/bridge-api/dist/server.js --name wp-bridge-api --max-memory-restart 200M
+            pm2 save
           ENDSSH
 
       - name: Health check
         run: |
-          sleep 5
-          ssh deploy-server "curl -sf http://localhost:3000 > /dev/null && echo 'Health check passed' || echo 'Health check failed'"
+          sleep 3
+          ssh deploy-server "curl -sf http://localhost:4000/health > /dev/null && echo 'Bridge API health check passed' || echo 'Bridge API health check failed'"

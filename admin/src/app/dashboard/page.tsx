@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { bridgeSSE, readSSEStream } from "@/lib/bridge-sse";
 
 type Persona = {
   name: string;
@@ -262,46 +263,31 @@ export default function DashboardPage() {
     setGroups([]);
     setPostMap({});
 
-    const es = fetch("/api/dashboard");
-    es.then(async (res) => {
-      if (!res.body) return;
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-
-      while (true) {
-        const { done: streamDone, value } = await reader.read();
-        if (streamDone) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const evt = JSON.parse(line.slice(6));
-            if (evt.type === "meta") {
-              setSites(evt.sites || []);
-              setGroups(evt.groups || []);
-              setLoading(false);
-            } else if (evt.type === "posts") {
-              setPostMap((prev) => ({
-                ...prev,
-                [evt.slug]: {
-                  posts: evt.posts || [],
-                  totalCount: evt.totalCount ?? 0,
-                  loaded: true,
-                  error: evt.error,
-                },
-              }));
-            } else if (evt.type === "done") {
-              setDone(true);
-              setLoadingPosts(false);
-            }
-          } catch {
-            /* ignore */
-          }
+    bridgeSSE({
+      vercelEndpoint: "/api/dashboard",
+      body: {},
+      method: "GET",
+    }).then(async ({ reader }) => {
+      await readSSEStream(reader, (evt) => {
+        if (evt.type === "meta") {
+          setSites((evt.sites as SiteCredential[]) || []);
+          setGroups((evt.groups as SiteGroup[]) || []);
+          setLoading(false);
+        } else if (evt.type === "posts") {
+          setPostMap((prev) => ({
+            ...prev,
+            [evt.slug as string]: {
+              posts: (evt.posts as WPPost[]) || [],
+              totalCount: (evt.totalCount as number) ?? 0,
+              loaded: true,
+              error: evt.error as boolean | undefined,
+            },
+          }));
+        } else if (evt.type === "done") {
+          setDone(true);
+          setLoadingPosts(false);
         }
-      }
+      });
       setLoadingPosts(false);
       setDone(true);
     }).catch(() => {

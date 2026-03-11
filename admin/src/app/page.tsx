@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { bridgeSSE, readSSEStream } from "@/lib/bridge-sse";
 import SiteGeneratorForm from "@/components/SiteGeneratorForm";
 import SitePreviewTable from "@/components/SitePreviewTable";
 import DeployProgress from "@/components/DeployProgress";
@@ -75,39 +76,20 @@ export default function Home() {
     });
 
     try {
-      const res = await fetch("/api/deploy-sites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ configs }),
+      const { reader } = await bridgeSSE({
+        vercelEndpoint: "/api/deploy-sites",
+        body: { configs },
       });
 
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-
-      if (!reader) throw new Error("Stream not available");
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const text = decoder.decode(value);
-        const lines = text.split("\n").filter((l) => l.startsWith("data: "));
-
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line.replace("data: ", ""));
-            setDeployStatus((prev) => ({
-              ...prev,
-              ...data,
-              log: data.message
-                ? [...prev.log, data.message]
-                : prev.log,
-            }));
-          } catch {
-            // skip invalid JSON
-          }
-        }
-      }
+      await readSSEStream(reader, (data) => {
+        setDeployStatus((prev) => ({
+          ...prev,
+          ...(data as Record<string, unknown>),
+          log: data.message
+            ? [...prev.log, data.message as string]
+            : prev.log,
+        }));
+      });
     } catch (err) {
       setDeployStatus((prev) => ({
         ...prev,
