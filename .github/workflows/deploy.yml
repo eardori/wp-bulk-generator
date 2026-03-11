@@ -1,0 +1,53 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'admin/**'
+      - 'scripts/rebuild-admin.sh'
+      - '.github/workflows/deploy.yml'
+
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          cat >> ~/.ssh/config <<EOF
+          Host deploy-server
+            HostName ${{ secrets.SSH_HOST }}
+            User ${{ secrets.SSH_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
+          EOF
+
+      - name: Pull latest code on server
+        run: |
+          ssh deploy-server << 'ENDSSH'
+            cd /home/ubuntu/wp-bulk-generator
+            git fetch origin main
+            git reset --hard origin/main
+            cd admin && npm ci
+          ENDSSH
+
+      - name: Build & restart
+        run: |
+          ssh deploy-server << 'ENDSSH'
+            cd /home/ubuntu/wp-bulk-generator
+            bash scripts/rebuild-admin.sh
+          ENDSSH
+
+      - name: Health check
+        run: |
+          sleep 5
+          ssh deploy-server "curl -sf http://localhost:3000 > /dev/null && echo 'Health check passed' || echo 'Health check failed'"

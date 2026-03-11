@@ -3,7 +3,7 @@
 ## 대기 중
 | ID | 날짜 | 요청자 | 우선순위 | 내용 | 관련 파일 | 비고 |
 |----|------|--------|----------|------|-----------|------|
-| (대기 중인 요청 없음) | | | | | | |
+| H-001 | 2026-03-11 | Kevin | 🔵 참고 | GitHub Actions CI/CD 추가됨 | `.github/workflows/ci.yml`, `deploy.yml` | PR → lint/build 자동 검증, main 머지 → EC2 자동 배포. GitHub Secrets 설정 필요 (SSH_PRIVATE_KEY, SSH_HOST, SSH_USER) |
 
 ## 진행 중
 | ID | 시작일 | 요청자 | 내용 | 관련 파일 |
@@ -18,3 +18,4 @@
 | 날짜 | 작성자 | 도구 | 변경 내용 |
 |------|--------|------|-----------|
 | 2026-03-10 | - | Claude Code | inbox 초기 구조 생성 |
+| 2026-03-11 | Kevin | Claude Code | CI/CD 추가 알림 등록 |
