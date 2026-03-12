@@ -51,8 +51,17 @@ for SITE_DIR in "$WEB_ROOT"/*/; do
 
   TOTAL_POSTS=$((TOTAL_POSTS + POST_COUNT))
 
-  # PHP 스크립트 실행 (persona, site_title을 인자로)
-  RESULT=$(wp eval-file "$PHP_SCRIPT" "$PERSONA_NAME" "$SITE_TITLE" \
+# PHP 스크립트 실행 (persona + GEO author metadata를 인자로)
+  PERSONA_EXPERTISE=""
+  PERSONA_CONCERN=""
+  PERSONA_BIO=""
+  if [ -f "$CONFIG_FILE" ]; then
+    PERSONA_EXPERTISE=$(jq -r --arg s "$SITE_SLUG" '.[] | select(.site_slug == $s) | .persona.expertise // empty' "$CONFIG_FILE" 2>/dev/null || echo "")
+    PERSONA_CONCERN=$(jq -r --arg s "$SITE_SLUG" '.[] | select(.site_slug == $s) | .persona.concern // empty' "$CONFIG_FILE" 2>/dev/null || echo "")
+    PERSONA_BIO=$(jq -r --arg s "$SITE_SLUG" '.[] | select(.site_slug == $s) | .persona.bio // empty' "$CONFIG_FILE" 2>/dev/null || echo "")
+  fi
+
+  RESULT=$(wp eval-file "$PHP_SCRIPT" "$PERSONA_NAME" "$SITE_TITLE" "$PERSONA_EXPERTISE" "$PERSONA_CONCERN" "$PERSONA_BIO" \
     --path="$SITE_DIR" --allow-root 2>&1) || true
 
   # 결과 출력 (RESULT: 라인 제외)

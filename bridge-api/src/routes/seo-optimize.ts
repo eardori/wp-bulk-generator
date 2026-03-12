@@ -30,6 +30,7 @@ type WPPost = {
   excerpt: { rendered: string };
   link: string;
   date: string;
+  modified?: string;
   slug: string;
   categories: number[];
   tags: number[];
@@ -42,11 +43,38 @@ function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
 }
 
-function hasJsonLd(html: string): boolean {
-  return html.includes("application/ld+json");
+function stripJsonLdScripts(html: string): string {
+  const $ = cheerio.load(html, null, false);
+  $('script[type="application/ld+json"]').remove();
+  return $.root().html()?.trim() || "";
 }
 
-function buildSchemaBlocks(post: WPPost, site: SiteCredential): string {
+function jsonLdSignature(html: string): string {
+  const $ = cheerio.load(html, null, false);
+  const chunks: string[] = [];
+
+  $('script[type="application/ld+json"]').each((_, script) => {
+    const raw = $(script).html()?.trim();
+    if (!raw) return;
+    try {
+      chunks.push(JSON.stringify(JSON.parse(raw)));
+    } catch {
+      chunks.push(raw.replace(/\s+/g, " "));
+    }
+  });
+
+  return chunks.join("\n");
+}
+
+function normalizeHtmlSignature(html: string): string {
+  return html.replace(/\s+/g, " ").trim();
+}
+
+function buildSchemaBlocks(
+  post: WPPost,
+  site: SiteCredential,
+  contentHtml: string
+): string {
   let schemas = "";
   const plainTitle = stripHtml(post.title.rendered);
   const plainExcerpt = stripHtml(post.excerpt.rendered).slice(0, 160);
@@ -65,7 +93,7 @@ function buildSchemaBlocks(post: WPPost, site: SiteCredential): string {
       ...(site.persona?.bio ? { "description": site.persona.bio } : {}),
     },
     "datePublished": post.date,
-    "dateModified": post.date,
+    "dateModified": post.modified || post.date,
     "publisher": {
       "@type": "Organization",
       "name": site.title
@@ -79,7 +107,7 @@ function buildSchemaBlocks(post: WPPost, site: SiteCredential): string {
   schemas += `\n<script type="application/ld+json">${JSON.stringify(articleJsonLd)}</script>`;
 
   // FAQ Schema — extract FAQ patterns from post content
-  const $ = cheerio.load(post.content.rendered, null, false);
+  const $ = cheerio.load(contentHtml, null, false);
   const faqItems: Array<{ question: string; answer: string }> = [];
 
   // Pattern 1: dl dt/dd
@@ -236,7 +264,7 @@ export async function seoOptimizeRoutes(app: FastifyInstance) {
           let posts: WPPost[];
           try {
             const res = await fetch(
-              `${baseUrl}/wp-json/wp/v2/posts?per_page=${PER_PAGE}&page=${page}&_fields=id,title,content,excerpt,link,date,slug,categories,tags&status=publish`,
+              `${baseUrl}/wp-json/wp/v2/posts?per_page=${PER_PAGE}&page=${page}&_fields=id,title,content,excerpt,link,date,modified,slug,categories,tags&status=publish`,
               { headers, cache: "no-store" }
             );
             if (!res.ok) break;
@@ -247,9 +275,17 @@ export async function seoOptimizeRoutes(app: FastifyInstance) {
 
           for (const post of posts) {
             const plainTitle = stripHtml(post.title.rendered);
+            const contentWithoutSchemas = stripJsonLdScripts(post.content.rendered);
 
-            // Skip if already has JSON-LD
-            if (hasJsonLd(post.content.rendered)) {
+            // 기존 JSON-LD를 제거한 뒤 최신 GEO schema를 다시 주입한다.
+            const improvedContent = improveImageAlts(contentWithoutSchemas, post.title.rendered);
+            const schemaBlocks = buildSchemaBlocks(post, site, improvedContent);
+            const currentSchemaSignature = jsonLdSignature(post.content.rendered);
+            const desiredSchemaSignature = jsonLdSignature(schemaBlocks);
+            const contentUnchanged =
+              normalizeHtmlSignature(contentWithoutSchemas) === normalizeHtmlSignature(improvedContent);
+
+            if (contentUnchanged && currentSchemaSignature === desiredSchemaSignature) {
               siteSkipped++;
               totalSkipped++;
               send({
@@ -257,16 +293,10 @@ export async function seoOptimizeRoutes(app: FastifyInstance) {
                 slug: site.slug,
                 postId: post.id,
                 title: plainTitle,
-                message: `⏭ "${plainTitle}" — 이미 스키마 있음`,
+                message: `⏭ "${plainTitle}" — 최신 GEO 적용 상태`,
               });
               continue;
             }
-
-            // Build schema blocks
-            const schemaBlocks = buildSchemaBlocks(post, site);
-
-            // Improve image alt tags
-            const improvedContent = improveImageAlts(post.content.rendered, post.title.rendered);
 
             // Final content: improved content + schema
             const updatedContent = improvedContent + schemaBlocks;
@@ -299,7 +329,7 @@ export async function seoOptimizeRoutes(app: FastifyInstance) {
                   slug: site.slug,
                   postId: post.id,
                   title: plainTitle,
-                  message: `✅ "${plainTitle}" — 스키마 주입 + alt 태그 개선`,
+                  message: `✅ "${plainTitle}" — GEO schema 갱신 + alt 태그 개선`,
                 });
               } else {
                 const err = await updateRes.text();

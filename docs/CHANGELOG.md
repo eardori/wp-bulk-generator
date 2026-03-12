@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-03-13: 기존 발행 글 GEO 재적용 로직 보강
+- **기존 글 GEO 재적용 수정**: 기존 JSON-LD가 이미 있는 포스트도 구버전 schema를 제거하고 최신 GEO schema로 다시 주입하도록 변경
+- **Bridge SEO Optimize 개선**: `seo-optimize`가 `speakable`, persona author 필드, FAQ schema를 최신 규격으로 재계산 후 덮어쓰도록 수정
+- **서버 스크립트 보강**: `seo-optimize.php`, `seo-optimize-existing.mjs`, `seo-optimize-existing.sh`가 최신 GEO 기준으로 재적용하도록 업데이트
+- **스킵 조건 정교화**: 본문/alt/schema가 모두 최신 상태인 글만 skip 처리
+
 ## 2026-03-12: Fly.io 마이그레이션 — Bridge API 분리
 - **Bridge API → Fly.io 분리**: compute-heavy 작업(AI 생성, 스크래핑, 발행)을 Fly.io 무료 티어로 이전
 - **EC2 Agent 신규**: EC2에 경량 Fastify 서버 (`:4001`) — credentials, deploy, health, groups, reserved-slugs만 담당
@@ -76,3 +82,4 @@
 | 2026-03-12 | Kevin | Claude Code | EC2 Bridge API 인프라 완료 기록 추가 |
 | 2026-03-12 | Kevin | Claude Code | Vercel E2E 연동 완료 + dotenv 추가 기록 |
 | 2026-03-12 | Kevin | Claude Code | Fly.io 마이그레이션 기록 추가 |
+| 2026-03-13 | Justin | Claude Code | 기존 발행 글 GEO 재적용 로직 보강 기록 추가 |
