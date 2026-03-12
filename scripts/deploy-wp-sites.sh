@@ -174,17 +174,55 @@ Allow: /
 User-agent: ClaudeBot
 Allow: /
 
-User-agent: Bytespider
-Allow: /
-
 User-agent: PerplexityBot
 Allow: /
 
 User-agent: Applebot-Extended
 Allow: /
 
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: Amazonbot
+Allow: /
+
+User-agent: FacebookBot
+Allow: /
+
+User-agent: cohere-ai
+Allow: /
+
 Sitemap: ${site_url}/sitemap_index.xml
 ROBOTS
+}
+
+write_llms_txt() {
+  local domain="$1"
+  local site_dir="$2"
+  local site_title="$3"
+  local tagline="$4"
+  local persona_name="$5"
+  local categories="$6"
+  local site_url
+  site_url="$(site_url_for_domain "$domain")"
+
+  cat > "$site_dir/llms.txt" << LLMS
+# ${site_title}
+> ${tagline}
+
+## About
+- Author: ${persona_name}
+- Site: ${site_url}
+- Content: Product reviews and buying guides in Korean
+
+## Categories
+$(echo "$categories" | tr ',' '\n' | sed 's/^ */- /')
+
+## Navigation
+- [Homepage](${site_url}): Latest reviews and recommendations
+- [Sitemap](${site_url}/sitemap_index.xml): All published articles
+LLMS
+  chown www-data:www-data "$site_dir/llms.txt"
 }
 
 write_nginx_config() {
@@ -257,6 +295,12 @@ server {
         log_not_found off;
     }
 
+    location = /llms.txt {
+        access_log off;
+        log_not_found off;
+        default_type text/plain;
+    }
+
     location ~ /sitemap.*\\.xml\$ {
         try_files \$uri /index.php?\$args;
         expires 5m;
@@ -327,6 +371,12 @@ server {
         log_not_found off;
     }
 
+    location = /llms.txt {
+        access_log off;
+        log_not_found off;
+        default_type text/plain;
+    }
+
     location ~ /sitemap.*\\.xml\$ {
         try_files \$uri /index.php?\$args;
         expires 5m;
@@ -370,6 +420,9 @@ finalize_site_setup() {
 
   write_robots_txt "$domain" "$site_dir"
   chown www-data:www-data "$site_dir/robots.txt"
+
+  # llms.txt는 finalize에서는 기존 파일이 없을 때만 생성 (파라미터 부족)
+  # 메인 설치 루프에서 전체 파라미터로 생성됨
 
   write_nginx_config "$slug" "$domain" "$site_dir"
 
@@ -488,6 +541,51 @@ add_action('wp_head', function() {
         if ($img) echo '<meta property="og:image" content="' . esc_url($img) . '" />' . "\n";
     }
 }, 1);
+
+// GEO: Organization Schema (모든 페이지)
+add_action('wp_head', function() {
+    $org = [
+        '@context' => 'https://schema.org',
+        '@type' => 'Organization',
+        'name' => get_bloginfo('name'),
+        'url' => home_url('/'),
+        'description' => get_bloginfo('description'),
+    ];
+    echo '<script type="application/ld+json">' . wp_json_encode($org, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>' . "\n";
+}, 2);
+
+// GEO: WebSite + SearchAction Schema (프론트 페이지)
+add_action('wp_head', function() {
+    if (!is_front_page()) return;
+    $ws = [
+        '@context' => 'https://schema.org',
+        '@type' => 'WebSite',
+        'name' => get_bloginfo('name'),
+        'url' => home_url('/'),
+        'potentialAction' => [
+            '@type' => 'SearchAction',
+            'target' => home_url('/?s={search_term_string}'),
+            'query-input' => 'required name=search_term_string',
+        ],
+    ];
+    echo '<script type="application/ld+json">' . wp_json_encode($ws, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>' . "\n";
+}, 2);
+
+// GEO: BreadcrumbList Schema (개별 포스트)
+add_action('wp_head', function() {
+    if (!is_singular('post')) return;
+    $cats = get_the_category();
+    $items = [
+        ['@type' => 'ListItem', 'position' => 1, 'name' => get_bloginfo('name'), 'item' => home_url('/')],
+    ];
+    if (!empty($cats)) {
+        $items[] = ['@type' => 'ListItem', 'position' => 2, 'name' => $cats[0]->name, 'item' => get_category_link($cats[0]->term_id)];
+        $items[] = ['@type' => 'ListItem', 'position' => 3, 'name' => get_the_title()];
+    } else {
+        $items[] = ['@type' => 'ListItem', 'position' => 2, 'name' => get_the_title()];
+    }
+    echo '<script type="application/ld+json">' . wp_json_encode(['@context' => 'https://schema.org', '@type' => 'BreadcrumbList', 'itemListElement' => $items], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>' . "\n";
+}, 2);
 SEOPHP
 }
 
@@ -696,10 +794,13 @@ for i in $(seq 0 $(($SITE_COUNT - 1))); do
   # Redis 캐시 활성화
   wp redis enable --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
 
-  # ---- 5.5. robots.txt 생성 (AI 봇 크롤링 허용) ----
-  echo "  [5.5/7] robots.txt & SEO 설정..."
+  # ---- 5.5. robots.txt & llms.txt 생성 (AI 봇 크롤링 허용 + GEO) ----
+  echo "  [5.5/7] robots.txt & llms.txt & SEO 설정..."
   write_robots_txt "$DOMAIN" "$SITE_DIR"
   chown www-data:www-data "$SITE_DIR/robots.txt"
+
+  CATS_COMMA=$(jq -r ".[$i].categories | join(\",\")" "$CONFIG_FILE" 2>/dev/null || echo "")
+  write_llms_txt "$DOMAIN" "$SITE_DIR" "$TITLE" "$TAGLINE" "$PERSONA_NAME" "$CATS_COMMA"
 
   # ---- 6. 테마 & 커스텀 CSS ----
   echo "  [6/7] 테마 & CSS 커스터마이징..."

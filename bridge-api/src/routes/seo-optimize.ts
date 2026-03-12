@@ -51,7 +51,7 @@ function buildSchemaBlocks(post: WPPost, site: SiteCredential): string {
   const plainTitle = stripHtml(post.title.rendered);
   const plainExcerpt = stripHtml(post.excerpt.rendered).slice(0, 160);
 
-  // Article Schema
+  // Article Schema (GEO 강화: author persona + speakable)
   const articleJsonLd = {
     "@context": "https://schema.org",
     "@type": "Article",
@@ -59,13 +59,20 @@ function buildSchemaBlocks(post: WPPost, site: SiteCredential): string {
     "description": plainExcerpt,
     "author": {
       "@type": "Person",
-      "name": site.persona?.name || site.admin_user
+      "name": site.persona?.name || site.admin_user,
+      ...(site.persona?.expertise ? { "jobTitle": `${site.persona.expertise} 리뷰어` } : {}),
+      ...(site.persona?.concern ? { "knowsAbout": site.persona.concern } : {}),
+      ...(site.persona?.bio ? { "description": site.persona.bio } : {}),
     },
     "datePublished": post.date,
     "dateModified": post.date,
     "publisher": {
       "@type": "Organization",
       "name": site.title
+    },
+    "speakable": {
+      "@type": "SpeakableSpecification",
+      "cssSelector": [".summary-box", "h2"]
     },
     "url": post.link
   };

@@ -227,7 +227,7 @@ async function publishToWordPress(
     finalHtml += `\n<script type="application/ld+json">${JSON.stringify(faqJsonLd)}</script>`;
   }
 
-  // Article Schema
+  // Article Schema (GEO 강화: author persona + speakable)
   const articleJsonLd = {
     "@context": "https://schema.org",
     "@type": "Article",
@@ -235,13 +235,20 @@ async function publishToWordPress(
     "description": article.metaDescription || article.excerpt,
     "author": {
       "@type": "Person",
-      "name": site.persona?.name || site.admin_user
+      "name": site.persona?.name || site.admin_user,
+      ...(site.persona?.expertise ? { "jobTitle": `${site.persona.expertise} 리뷰어` } : {}),
+      ...(site.persona?.concern ? { "knowsAbout": site.persona.concern } : {}),
+      ...(site.persona?.bio ? { "description": site.persona.bio } : {}),
     },
     "datePublished": new Date().toISOString(),
     "dateModified": new Date().toISOString(),
     "publisher": {
       "@type": "Organization",
       "name": site.title
+    },
+    "speakable": {
+      "@type": "SpeakableSpecification",
+      "cssSelector": [".summary-box", "h2"]
     },
     ...(article.tags?.length > 0 ? { "keywords": article.tags.join(", ") } : {})
   };
