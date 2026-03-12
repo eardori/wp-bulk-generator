@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-03-13: 대시보드 405 에러 수정
+- **Dashboard API 405 수정**: `/api/dashboard/route.ts`에 POST 핸들러 추가 — `bridgeSSE`가 토큰 발급 시 항상 POST로 요청하지만 GET만 있어서 405 발생하던 문제 해결
+
 ## 2026-03-13: 기존 발행 글 GEO 재적용 로직 보강
 - **기존 글 GEO 재적용 수정**: 기존 JSON-LD가 이미 있는 포스트도 구버전 schema를 제거하고 최신 GEO schema로 다시 주입하도록 변경
 - **Bridge SEO Optimize 개선**: `seo-optimize`가 `speakable`, persona author 필드, FAQ schema를 최신 규격으로 재계산 후 덮어쓰도록 수정
