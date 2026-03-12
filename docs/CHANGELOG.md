@@ -1,13 +1,24 @@
 # Changelog
 
-## 2026-03-11: Vercel 배포 성공 + EC2 인프라 설정 대기
+## 2026-03-12: EC2 Bridge API 인프라 완료
+- **EC2 인프라 설정 완료**:
+  - DNS A 레코드: `bridge.allmyreview.site → 108.129.225.228` 확인
+  - GitHub deploy key 등록 (ed25519)
+  - Git clone: `/home/ubuntu/wp-bulk-generator`
+  - Bridge API: npm install + tsc build + `.env` 설정
+  - Nginx: reverse proxy + HTTPS + SSE 지원 (proxy_buffering off, 700s timeout)
+  - SSL 인증서: certbot webroot 방식 발급 (`/etc/letsencrypt/live/bridge.allmyreview.site/`)
+  - PM2: `wp-bridge-api` 등록 + 저장
+- **TypeScript 빌드 오류 수정**:
+  - `auth.ts`: FastifyRequest 캐스팅 + jwt.SignOptions 타입 수정
+  - `generate-configs.ts`: isSubdomain 타입 `boolean | string` → `boolean` 통일
+- **HTTPS 정상 확인**: `https://bridge.allmyreview.site/health` 응답 확인
+- **Vercel 연동 완료**: 환경변수 설정 + E2E 테스트 통과 (server-status, fetch-sites, site-groups)
+- **dotenv 추가**: Bridge API .env 파일 로드를 위해 dotenv 패키지 추가
+- **.env.example 수정**: BRIDGE_API_URL에서 `/api` 접미사 제거
+
+## 2026-03-11: Vercel 배포 성공
 - **Vercel 배포 성공**: Root Directory=admin 설정, 환경변수 설정 완료
-- **EC2 인프라 남은 작업**:
-  - DNS A 레코드: `bridge.allmyreview.site → 108.129.225.228`
-  - SSL 인증서: certbot으로 bridge 도메인 추가
-  - Nginx 리버스 프록시: bridge-api 사이트 설정
-  - Git clone + Bridge API npm install/build + PM2 등록
-  - Vercel 환경변수에 BRIDGE_API_KEY/JWT_SECRET 추가
 - **생성된 시크릿**: BRIDGE_API_KEY, BRIDGE_JWT_SECRET (Vercel + EC2 .env에 설정 필요)
 
 ## 2026-03-11: Vercel 마이그레이션 + Bridge API 구축
@@ -51,3 +62,5 @@
 | 2026-03-10 | - | Claude Code | CHANGELOG 초안 작성 |
 | 2026-03-11 | Kevin | Claude Code | CI/CD + Vercel 마이그레이션 + Bridge API 기록 추가 |
 | 2026-03-11 | Kevin | Claude Code | Vercel 배포 성공 + EC2 인프라 대기 상태 기록 |
+| 2026-03-12 | Kevin | Claude Code | EC2 Bridge API 인프라 완료 기록 추가 |
+| 2026-03-12 | Kevin | Claude Code | Vercel E2E 연동 완료 + dotenv 추가 기록 |
