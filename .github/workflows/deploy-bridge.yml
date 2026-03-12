@@ -1,4 +1,4 @@
-name: Deploy Bridge API
+name: Deploy EC2 Agent
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 
 jobs:
   deploy:
-    name: Deploy Bridge API to EC2
+    name: Deploy EC2 Agent to EC2
     runs-on: ubuntu-latest
 
     steps:
@@ -30,7 +30,7 @@ jobs:
             StrictHostKeyChecking no
           EOF
 
-      - name: Pull & build Bridge API
+      - name: Pull & build EC2 Agent
         run: |
           ssh deploy-server << 'ENDSSH'
             cd /home/ubuntu/wp-bulk-generator
@@ -41,14 +41,15 @@ jobs:
             npm run build
           ENDSSH
 
-      - name: Restart Bridge API
+      - name: Restart EC2 Agent
         run: |
           ssh deploy-server << 'ENDSSH'
-            pm2 restart wp-bridge-api || pm2 start /home/ubuntu/wp-bulk-generator/bridge-api/dist/server.js --name wp-bridge-api --max-memory-restart 200M
+            pm2 delete wp-bridge-api 2>/dev/null || true
+            pm2 restart ec2-agent || pm2 start /home/ubuntu/wp-bulk-generator/bridge-api/dist/ec2-agent.js --name ec2-agent --max-memory-restart 100M
             pm2 save
           ENDSSH
 
       - name: Health check
         run: |
           sleep 3
-          ssh deploy-server "curl -sf http://localhost:4000/health > /dev/null && echo 'Bridge API health check passed' || echo 'Bridge API health check failed'"
+          ssh deploy-server "curl -sf http://localhost:4001/health > /dev/null && echo 'EC2 Agent health check passed' || echo 'EC2 Agent health check failed'"

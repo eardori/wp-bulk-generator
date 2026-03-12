@@ -1,11 +1,6 @@
-import { readFileSync, existsSync } from "fs";
 import type { FastifyInstance } from "fastify";
 import { setupSSE } from "../utils/sse.js";
-
-const CREDS_PATH =
-  process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
-const GROUPS_PATH =
-  process.env.GROUPS_PATH || "/home/ubuntu/wp-bridge-api/data/site-groups.json";
+import { fetchCredentials, fetchGroups } from "../lib/ec2-client.js";
 
 type SiteCredential = {
   slug: string;
@@ -24,13 +19,6 @@ type WPPost = {
   date: string;
   status: string;
 };
-
-function tryReadJson<T>(path: string): T[] {
-  try {
-    if (existsSync(path)) return JSON.parse(readFileSync(path, "utf-8")) as T[];
-  } catch { /* ignore */ }
-  return [];
-}
 
 async function fetchWPPosts(site: SiteCredential, perPage = 15): Promise<WPPost[]> {
   const controller = new AbortController();
@@ -69,8 +57,9 @@ export async function dashboardRoutes(app: FastifyInstance) {
     const { send, close } = setupSSE(reply);
 
     try {
-      const sites = tryReadJson<SiteCredential>(CREDS_PATH);
-      const groups = tryReadJson<Record<string, unknown>>(GROUPS_PATH);
+      const sitesRaw = await fetchCredentials();
+      const sites = sitesRaw as unknown as SiteCredential[];
+      const groups = await fetchGroups();
 
       send({ type: "meta", sites, groups });
 

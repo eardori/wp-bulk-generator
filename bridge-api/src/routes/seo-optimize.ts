@@ -1,7 +1,7 @@
-import { readFileSync, existsSync } from "fs";
 import * as cheerio from "cheerio";
 import type { FastifyInstance } from "fastify";
 import { setupSSE } from "../utils/sse.js";
+import { fetchCredentials } from "../lib/ec2-client.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,16 +37,6 @@ type WPPost = {
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-const CREDS_PATH = process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
-const CONFIG_PATH = process.env.CONFIG_PATH || "/root/wp-sites-config.json";
-
-function tryReadJson<T>(path: string): T[] {
-  try {
-    if (existsSync(path)) return JSON.parse(readFileSync(path, "utf-8")) as T[];
-  } catch { /* ignore */ }
-  return [];
-}
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
@@ -176,26 +166,14 @@ export async function seoOptimizeRoutes(app: FastifyInstance) {
       sites?: string[];
     };
 
-    const allSites = tryReadJson<SiteCredential>(CREDS_PATH);
-
-    // Merge persona info from config
-    const configData = tryReadJson<Record<string, unknown>>(CONFIG_PATH);
-    const configMap = new Map<string, Record<string, unknown>>();
-    for (const cfg of configData) {
-      if (cfg.site_slug) configMap.set(cfg.site_slug as string, cfg);
-    }
+    // EC2 Agent에서 credentials (persona 병합 포함) 가져오기
+    const allSitesRaw = await fetchCredentials();
+    const allSites = allSitesRaw as unknown as SiteCredential[];
 
     // Filter sites based on request
     const slugFilter = sitesList || (siteSlug ? [siteSlug] : []);
     const sites = allSites
-      .filter(s => slugFilter.length === 0 || slugFilter.includes(s.slug))
-      .map(s => {
-        const cfg = configMap.get(s.slug);
-        if (cfg?.persona && !s.persona) {
-          return { ...s, persona: cfg.persona as SiteCredential["persona"] };
-        }
-        return s;
-      });
+      .filter(s => slugFilter.length === 0 || slugFilter.includes(s.slug));
 
     if (sites.length === 0) {
       return reply.status(400).send({ error: "사이트를 찾을 수 없습니다." });

@@ -1,28 +1,10 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { readFileSync, existsSync } from "fs";
 import type { FastifyInstance } from "fastify";
 import { setupSSE } from "../utils/sse.js";
+import { fetchReservedSlugs } from "../lib/ec2-client.js";
 
 const BATCH_SIZE = 10;
 const MAX_SLUG_LENGTH = 15;
-
-const CREDS_PATH = process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
-const CONFIG_PATH = process.env.CONFIG_PATH || "/root/wp-sites-config.json";
-
-type SiteRecord = {
-  slug?: string;
-  site_slug?: string;
-  domain?: string;
-};
-
-function tryReadJson<T>(path: string): T[] {
-  try {
-    if (existsSync(path)) return JSON.parse(readFileSync(path, "utf-8")) as T[];
-  } catch {
-    /* ignore cache read failures */
-  }
-  return [];
-}
 
 function sanitizeSlug(value: string): string {
   const cleaned = value
@@ -34,19 +16,16 @@ function sanitizeSlug(value: string): string {
   return trimmed.length >= 3 ? trimmed : "site";
 }
 
-function loadReservedSlugs(): Set<string> {
+async function loadReservedSlugs(): Promise<Set<string>> {
   const reserved = new Set<string>();
-
-  const existing = [
-    ...tryReadJson<SiteRecord>(CREDS_PATH),
-    ...tryReadJson<SiteRecord>(CONFIG_PATH),
-  ];
-
-  for (const site of existing) {
-    const slug = site.slug || site.site_slug || site.domain?.split(".")[0] || "";
-    if (slug) reserved.add(sanitizeSlug(slug));
+  try {
+    const { slugs } = await fetchReservedSlugs();
+    for (const slug of slugs) {
+      reserved.add(sanitizeSlug(slug));
+    }
+  } catch {
+    // EC2 Agent 연결 실패 시 빈 set으로 진행
   }
-
   return reserved;
 }
 
@@ -228,7 +207,7 @@ export async function generateConfigsRoutes(app: FastifyInstance) {
     const domainDesc = isSubdomain
       ? `site_slug + ".${base_domain}" (예: "glowdiary.${base_domain}")`
       : `site_slug + "${domainSuffix}" (예: "glowdiary${domainSuffix}")`;
-    const reservedSlugs = loadReservedSlugs();
+    const reservedSlugs = await loadReservedSlugs();
 
     const { send, close } = setupSSE(reply);
 

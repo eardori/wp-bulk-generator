@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-03-12: Fly.io 마이그레이션 — Bridge API 분리
+- **Bridge API → Fly.io 분리**: compute-heavy 작업(AI 생성, 스크래핑, 발행)을 Fly.io 무료 티어로 이전
+- **EC2 Agent 신규**: EC2에 경량 Fastify 서버 (`:4001`) — credentials, deploy, health, groups, reserved-slugs만 담당
+- **ec2-client.ts**: Fly.io → EC2 Agent HTTP 클라이언트 유틸리티
+- **Hybrid 라우트 수정**: generate-configs, seo-optimize, dashboard — 로컬 파일 읽기 → EC2 Agent API 호출
+- **server.ts 분리**: EC2-only 라우트 제거, HOST `0.0.0.0`, 경량 `/health` 엔드포인트
+- **Dockerfile**: node:20-slim + Playwright Chromium (Fly.io 배포용)
+- **fly.toml**: nrt 리전, shared-cpu-1x, 256MB, auto_stop
+- **CI/CD**: deploy-fly.yml (Fly.io 자동 배포) + deploy-bridge.yml → EC2 Agent 전용으로 변경
+- **환경변수**: EC2_AGENT_URL, EC2_AGENT_KEY 추가
+
 ## 2026-03-12: EC2 Bridge API 인프라 완료
 - **EC2 인프라 설정 완료**:
   - DNS A 레코드: `bridge.allmyreview.site → 108.129.225.228` 확인
@@ -64,3 +75,4 @@
 | 2026-03-11 | Kevin | Claude Code | Vercel 배포 성공 + EC2 인프라 대기 상태 기록 |
 | 2026-03-12 | Kevin | Claude Code | EC2 Bridge API 인프라 완료 기록 추가 |
 | 2026-03-12 | Kevin | Claude Code | Vercel E2E 연동 완료 + dotenv 추가 기록 |
+| 2026-03-12 | Kevin | Claude Code | Fly.io 마이그레이션 기록 추가 |

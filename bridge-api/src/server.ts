@@ -3,14 +3,9 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { verifyApiKey } from "./utils/auth.js";
 import { closeBrowser } from "./utils/browser.js";
-import { healthRoutes } from "./routes/health.js";
-import { credentialsRoutes } from "./routes/credentials.js";
-import { groupsRoutes } from "./routes/groups.js";
-import { reservedSlugsRoutes } from "./routes/reserved-slugs.js";
 import { imageRoutes } from "./routes/image.js";
 import { scrapeRoutes } from "./routes/scrape.js";
 import { reviewsRoutes } from "./routes/reviews.js";
-import { deployRoutes } from "./routes/deploy.js";
 import { generateArticlesRoutes } from "./routes/generate-articles.js";
 import { generateConfigsRoutes } from "./routes/generate-configs.js";
 import { publishArticlesRoutes } from "./routes/publish-articles.js";
@@ -18,7 +13,7 @@ import { seoOptimizeRoutes } from "./routes/seo-optimize.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 
 const PORT = Number(process.env.PORT) || 4000;
-const HOST = process.env.HOST || "127.0.0.1";
+const HOST = process.env.HOST || "0.0.0.0";
 
 const app = Fastify({
   logger: true,
@@ -39,15 +34,13 @@ await app.register(cors, {
 // 모든 요청에 API Key 또는 JWT 인증 적용
 app.addHook("onRequest", verifyApiKey);
 
-// 라우트 등록
-await app.register(healthRoutes);
-await app.register(credentialsRoutes);
-await app.register(groupsRoutes);
-await app.register(reservedSlugsRoutes);
+// Health check (Fly.io 자체 상태)
+app.get("/health", async () => ({ status: "ok", service: "bridge-api" }));
+
+// 라우트 등록 (EC2-independent + hybrid)
 await app.register(imageRoutes);
 await app.register(scrapeRoutes);
 await app.register(reviewsRoutes);
-await app.register(deployRoutes);
 await app.register(generateArticlesRoutes);
 await app.register(generateConfigsRoutes);
 await app.register(publishArticlesRoutes);
