@@ -6,6 +6,10 @@
 - **SSE 응답 헤더 보존**: `setupSSE()`가 기존 CORS 헤더를 덮어쓰지 않도록 수정해 실제 스트림 응답에도 `Access-Control-Allow-Origin` 유지
 - **환경 예제 정리**: `admin/.env.example`, `bridge-api/.env.example`를 Lightsail + 멀티 origin 기준으로 업데이트
 
+## 2026-03-13: 사이트 배포 404 수정
+- **원인 확인**: admin은 `POST /deploy`로 SSE 연결하지만, Lightsail Bridge 서버(:4000)에 `deploy` 라우트가 등록되지 않아 `Route POST:/deploy not found` 발생
+- **Bridge 라우트 복구**: 외부 SSE 진입점인 Bridge API에도 `deployRoutes`를 다시 등록해 사이트 생성 후 배포 흐름 복구
+
 ## 2026-03-13: Lightsail Tokyo 인프라 마이그레이션 완료
 - **서버 이전**: EC2 Ireland (108.129.225.228) → Lightsail Tokyo (54.248.12.228)
   - 2 vCPU, 1.9GB RAM, 58GB Disk, Ubuntu 22.04

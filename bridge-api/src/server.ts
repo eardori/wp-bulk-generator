@@ -11,6 +11,7 @@ import { generateConfigsRoutes } from "./routes/generate-configs.js";
 import { publishArticlesRoutes } from "./routes/publish-articles.js";
 import { seoOptimizeRoutes } from "./routes/seo-optimize.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { deployRoutes } from "./routes/deploy.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -82,6 +83,7 @@ await app.register(generateConfigsRoutes);
 await app.register(publishArticlesRoutes);
 await app.register(seoOptimizeRoutes);
 await app.register(dashboardRoutes);
+await app.register(deployRoutes);
 
 // Graceful shutdown
 const shutdown = async () => {
