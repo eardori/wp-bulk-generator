@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import type { FastifyInstance } from "fastify";
 import { setupSSE } from "../utils/sse.js";
+import { sanitizeGeneratedArticle } from "../lib/article-sanitizer.js";
 import type {
   ScrapedProduct,
   ProductReview,
@@ -904,7 +905,7 @@ JSON 형식으로 응답하세요:
     const restaurantReviewImages = buildReviewImagesFromIndices(product.reviews, finalRestaurantReviewImageIndices);
     const restaurantHtmlContent = injectReviewImagePlaceholders(parsed.htmlContent || "", finalRestaurantReviewImageIndices);
 
-    return {
+    return sanitizeGeneratedArticle({
       id: `${site.slug}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       siteSlug: site.slug,
       siteDomain: site.domain,
@@ -921,10 +922,10 @@ JSON 형식으로 응답하세요:
       tags: parsed.tags || [],
       faqSchema: faqItems,
       wordCount: estimateVisibleWordCount(restaurantHtmlContent),
-      status: "generated",
+      status: "generated" as const,
       reviewImages: restaurantReviewImages,
       usedReviewImageIndices: finalRestaurantReviewImageIndices,
-    };
+    });
   }
 
   // ── 일반 제품 리뷰 프롬프트 ──────────────────────────────
@@ -1075,7 +1076,7 @@ JSON 형식으로 응답하세요:
 
   const reviewImages = buildReviewImagesFromIndices(availableReviewsForImages, finalUsedReviewImageIndices);
 
-  return {
+  return sanitizeGeneratedArticle({
     id: `${site.slug}-${Date.now()}-${articleVariation}`,
     siteSlug: site.slug,
     siteDomain: site.domain,
@@ -1092,10 +1093,10 @@ JSON 형식으로 응답하세요:
     tags: parsed.tags || [],
     faqSchema: faqItems,
     wordCount,
-    status: "generated",
+    status: "generated" as const,
     reviewImages,
     usedReviewImageIndices: finalUsedReviewImageIndices,
-  };
+  });
 }
 
 // ── Route ────────────────────────────────────────────────────────────────────

@@ -1,6 +1,10 @@
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import type { FastifyInstance } from "fastify";
+import { tmpdir } from "os";
+import { join } from "path";
 import { setupSSE } from "../utils/sse.js";
+import { sanitizeGeneratedArticle } from "../lib/article-sanitizer.js";
 import type { ReviewImage } from "../types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -58,6 +62,9 @@ type PublishResult = {
 
 type SendFn = (data: Record<string, unknown>) => void;
 
+const REMOTE_FETCH_TIMEOUT_MS = Number(process.env.WP_REMOTE_FETCH_TIMEOUT_MS || 20000);
+const WP_SITES_ROOT = process.env.WP_SITES_ROOT || "/var/www";
+
 // ── Image helpers ────────────────────────────────────────────────────────────
 
 function downloadImageWithCurl(url: string): Buffer {
@@ -90,6 +97,7 @@ async function uploadToWordPress(
       "Content-Type": contentType,
     },
     body: new Uint8Array(buffer),
+    signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -181,53 +189,79 @@ function replacePlaceholders(
   });
 }
 
-// ── WordPress publish ────────────────────────────────────────────────────────
+function getLocalSiteDir(site: SiteCredential): string {
+  return join(WP_SITES_ROOT, site.slug);
+}
 
-async function publishToWordPress(
-  article: GeneratedArticle,
-  site: SiteCredential,
-  send: SendFn
-): Promise<PublishResult> {
+function hasLocalWordPress(site: SiteCredential): boolean {
+  return existsSync(join(getLocalSiteDir(site), "wp-config.php"));
+}
+
+async function probeRemoteWordPress(site: SiteCredential): Promise<{
+  usable: boolean;
+  reason?: string;
+}> {
   const baseUrl = site.url.replace(/\/$/, "");
-  const authHeader =
-    "Basic " +
-    Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
 
-  const wpHeaders = {
-    "Content-Type": "application/json",
-    Authorization: authHeader,
-  };
+  try {
+    const res = await fetch(`${baseUrl}/wp-json/`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(12000),
+    });
 
-  // Upload review images first
-  let uploadedMap = new Map<string, { id: number; url: string }>();
-  if (article.reviewImages && article.reviewImages.length > 0) {
-    uploadedMap = await uploadReviewImages(article.reviewImages, site, send);
+    const contentType = res.headers.get("content-type") || "";
+    const body = await res.text();
+
+    if (!res.ok) {
+      return {
+        usable: false,
+        reason: `REST preflight ${res.status}: ${body.slice(0, 120) || "응답 없음"}`,
+      };
+    }
+
+    if (!contentType.includes("json")) {
+      return {
+        usable: false,
+        reason: `REST preflight non-json: ${body.slice(0, 120) || "빈 응답"}`,
+      };
+    }
+
+    if (!body.includes("\"namespaces\"")) {
+      return {
+        usable: false,
+        reason: `REST preflight invalid payload: ${body.slice(0, 120) || "빈 응답"}`,
+      };
+    }
+
+    return { usable: true };
+  } catch (error) {
+    return {
+      usable: false,
+      reason: error instanceof Error ? error.message : "알 수 없는 연결 오류",
+    };
   }
+}
 
-  // Replace image placeholders in HTML content
-  const replacedHtml = replacePlaceholders(article.htmlContent, article, uploadedMap);
-
-  // SEO: FAQ JSON-LD + Article Schema.org
+function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replacedHtml: string): string {
   let finalHtml = replacedHtml;
 
-  // FAQ Schema
   if (article.faqSchema && article.faqSchema.length > 0) {
     const faqJsonLd = {
       "@context": "https://schema.org",
       "@type": "FAQPage",
-      "mainEntity": article.faqSchema.map(faq => ({
+      "mainEntity": article.faqSchema.map((faq) => ({
         "@type": "Question",
         "name": faq.question,
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": faq.answer
-        }
-      }))
+          "text": faq.answer,
+        },
+      })),
     };
     finalHtml += `\n<script type="application/ld+json">${JSON.stringify(faqJsonLd)}</script>`;
   }
 
-  // Article Schema (GEO 강화: author persona + speakable)
   const articleJsonLd = {
     "@context": "https://schema.org",
     "@type": "Article",
@@ -244,22 +278,39 @@ async function publishToWordPress(
     "dateModified": new Date().toISOString(),
     "publisher": {
       "@type": "Organization",
-      "name": site.title
+      "name": site.title,
     },
     "speakable": {
       "@type": "SpeakableSpecification",
-      "cssSelector": [".summary-box", "h2"]
+      "cssSelector": [".summary-box", "h2"],
     },
-    ...(article.tags?.length > 0 ? { "keywords": article.tags.join(", ") } : {})
+    ...(article.tags?.length > 0 ? { "keywords": article.tags.join(", ") } : {}),
   };
   finalHtml += `\n<script type="application/ld+json">${JSON.stringify(articleJsonLd)}</script>`;
 
-  // 1. Ensure category exists
+  return finalHtml;
+}
+
+async function publishViaRestApi(
+  article: GeneratedArticle,
+  site: SiteCredential,
+  finalHtml: string
+): Promise<PublishResult> {
+  const baseUrl = site.url.replace(/\/$/, "");
+  const authHeader =
+    "Basic " +
+    Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
+
+  const wpHeaders = {
+    "Content-Type": "application/json",
+    Authorization: authHeader,
+  };
+
   let categoryId = 1;
   try {
     const catRes = await fetch(
       `${baseUrl}/wp-json/wp/v2/categories?search=${encodeURIComponent(article.category)}`,
-      { headers: wpHeaders }
+      { headers: wpHeaders, signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS) }
     );
     const cats = await catRes.json();
     if (cats.length > 0) {
@@ -269,6 +320,7 @@ async function publishToWordPress(
         method: "POST",
         headers: wpHeaders,
         body: JSON.stringify({ name: article.category }),
+        signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
       });
       if (createCatRes.ok) {
         const newCat = await createCatRes.json();
@@ -279,14 +331,13 @@ async function publishToWordPress(
     /* use default category */
   }
 
-  // 2. Create tags
   const tagIds: number[] = [];
   const tagNames = Array.from(new Set([article.sourceTitle, ...article.tags].filter(Boolean))).slice(0, 5);
   for (const tagName of tagNames) {
     try {
       const tagRes = await fetch(
         `${baseUrl}/wp-json/wp/v2/tags?search=${encodeURIComponent(tagName)}`,
-        { headers: wpHeaders }
+        { headers: wpHeaders, signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS) }
       );
       const tags = await tagRes.json();
       if (tags.length > 0) {
@@ -296,6 +347,7 @@ async function publishToWordPress(
           method: "POST",
           headers: wpHeaders,
           body: JSON.stringify({ name: tagName }),
+          signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
         });
         if (createTagRes.ok) {
           const newTag = await createTagRes.json();
@@ -307,7 +359,6 @@ async function publishToWordPress(
     }
   }
 
-  // 3. Create post
   const postData = {
     title: article.title,
     content: finalHtml,
@@ -326,6 +377,7 @@ async function publishToWordPress(
     method: "POST",
     headers: wpHeaders,
     body: JSON.stringify(postData),
+    signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
   });
 
   if (!postRes.ok) {
@@ -336,11 +388,189 @@ async function publishToWordPress(
   const post = await postRes.json();
   const postUrl = post.link || `${baseUrl}/?p=${post.id}`;
   await warmPublishedUrls(baseUrl, postUrl);
+
   return {
     postId: post.id,
     postUrl,
     finalHtml,
   };
+}
+
+async function publishLocallyWithWpCli(
+  article: GeneratedArticle,
+  site: SiteCredential,
+  finalHtml: string
+): Promise<PublishResult> {
+  const siteDir = getLocalSiteDir(site);
+  const tempDir = mkdtempSync(join(tmpdir(), "wpbulk-publish-"));
+  const payloadPath = join(tempDir, "payload.json");
+  const scriptPath = join(tempDir, "publish-local.php");
+
+  try {
+    writeFileSync(
+      payloadPath,
+      JSON.stringify({
+        title: article.title,
+        content: finalHtml,
+        excerpt: article.excerpt,
+        slug: article.slug,
+        category: article.category,
+        tags: Array.from(new Set([article.sourceTitle, ...article.tags].filter(Boolean))).slice(0, 5),
+        metaTitle: article.metaTitle,
+        metaDescription: article.metaDescription,
+      })
+    );
+
+    writeFileSync(
+      scriptPath,
+      `<?php
+if ($argc < 2) {
+  fwrite(STDERR, "payload path missing");
+  exit(1);
+}
+
+$payload = json_decode(file_get_contents($argv[1]), true);
+if (!is_array($payload)) {
+  fwrite(STDERR, "invalid payload");
+  exit(1);
+}
+
+$category_id = 1;
+$category_name = trim((string)($payload['category'] ?? ''));
+if ($category_name !== '') {
+  $term = term_exists($category_name, 'category');
+  if (!$term) {
+    $term = wp_insert_term($category_name, 'category');
+  }
+
+  if (!is_wp_error($term)) {
+    $category_id = (int)(is_array($term) ? ($term['term_id'] ?? 1) : $term);
+  }
+}
+
+$tag_ids = [];
+$tag_names = is_array($payload['tags'] ?? null) ? $payload['tags'] : [];
+foreach ($tag_names as $tag_name) {
+  $tag_name = trim((string)$tag_name);
+  if ($tag_name === '') continue;
+
+  $term = term_exists($tag_name, 'post_tag');
+  if (!$term) {
+    $term = wp_insert_term($tag_name, 'post_tag');
+  }
+
+  if (!is_wp_error($term)) {
+    $tag_ids[] = (int)(is_array($term) ? ($term['term_id'] ?? 0) : $term);
+  }
+}
+
+$post_id = wp_insert_post([
+  'post_title' => (string)($payload['title'] ?? ''),
+  'post_content' => (string)($payload['content'] ?? ''),
+  'post_excerpt' => (string)($payload['excerpt'] ?? ''),
+  'post_name' => (string)($payload['slug'] ?? ''),
+  'post_status' => 'publish',
+  'post_type' => 'post',
+  'post_category' => [$category_id],
+], true);
+
+if (is_wp_error($post_id)) {
+  fwrite(STDERR, $post_id->get_error_message());
+  exit(1);
+}
+
+if (!empty($tag_ids)) {
+  wp_set_post_terms($post_id, $tag_ids, 'post_tag');
+}
+
+$meta_title = trim((string)($payload['metaTitle'] ?? ''));
+if ($meta_title !== '') {
+  update_post_meta($post_id, '_yoast_wpseo_title', $meta_title);
+}
+
+$meta_desc = trim((string)($payload['metaDescription'] ?? ''));
+if ($meta_desc !== '') {
+  update_post_meta($post_id, '_yoast_wpseo_metadesc', $meta_desc);
+}
+
+echo wp_json_encode([
+  'postId' => (int)$post_id,
+  'postUrl' => get_permalink($post_id),
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+`
+    );
+
+    const output = execFileSync(
+      "wp",
+      ["eval-file", scriptPath, payloadPath, `--path=${siteDir}`, "--allow-root"],
+      { encoding: "utf8", timeout: 45000 }
+    ).trim();
+
+    const parsed = JSON.parse(output);
+    const baseUrl = site.url.replace(/\/$/, "");
+    const postUrl = parsed.postUrl || `${baseUrl}/?p=${parsed.postId}`;
+    await warmPublishedUrls(baseUrl, postUrl);
+
+    return {
+      postId: Number(parsed.postId),
+      postUrl,
+      finalHtml,
+    };
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+// ── WordPress publish ────────────────────────────────────────────────────────
+
+async function publishToWordPress(
+  article: GeneratedArticle,
+  site: SiteCredential,
+  send: SendFn
+): Promise<PublishResult> {
+  const sanitizedArticle = sanitizeGeneratedArticle(article);
+  const remoteProbe = await probeRemoteWordPress(site);
+  const localWordPressAvailable = hasLocalWordPress(site);
+
+  let uploadedMap = new Map<string, { id: number; url: string }>();
+  if (remoteProbe.usable && sanitizedArticle.reviewImages && sanitizedArticle.reviewImages.length > 0) {
+    uploadedMap = await uploadReviewImages(sanitizedArticle.reviewImages, site, send);
+  }
+
+  const replacedHtml = replacePlaceholders(sanitizedArticle.htmlContent, sanitizedArticle, uploadedMap);
+  const finalHtml = buildFinalHtml(sanitizedArticle, site, replacedHtml);
+
+  if (!remoteProbe.usable) {
+    if (!localWordPressAvailable) {
+      throw new Error(`WP REST 연결 실패: ${remoteProbe.reason || "원격 사이트 응답 없음"}`);
+    }
+
+    send({
+      type: "progress",
+      articleId: article.id,
+      siteSlug: article.siteSlug,
+      message: `원격 WordPress 연결 실패, 로컬 WP-CLI로 우회 발행 중...`,
+    });
+
+    return publishLocallyWithWpCli(sanitizedArticle, site, finalHtml);
+  }
+
+  try {
+    return await publishViaRestApi(sanitizedArticle, site, finalHtml);
+  } catch (error) {
+    if (!localWordPressAvailable) {
+      throw error;
+    }
+
+    send({
+      type: "progress",
+      articleId: article.id,
+      siteSlug: article.siteSlug,
+      message: `원격 WordPress API 실패, 로컬 WP-CLI로 재시도 중...`,
+    });
+
+    return publishLocallyWithWpCli(sanitizedArticle, site, finalHtml);
+  }
 }
 
 async function warmPublishedUrls(baseUrl: string, postUrl: string): Promise<void> {
