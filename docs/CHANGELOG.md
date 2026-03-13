@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-14: 레포 공개 전환 + Admin 보안
+
+- **GitHub 레포 public 전환**: Vercel Hobby 플랜 협업 제한 해소 (collaborator push → 자동 배포)
+- **main 브랜치 보호**: 삭제 차단 ruleset 활성화
+- **MIT 라이선스 추가**: Copyright HOS
+- **Admin Basic Auth**: Next.js middleware로 ID/PW 인증 추가 (`ADMIN_USER`/`ADMIN_PASS` 환경변수 기반, 미설정 시 스킵)
+
 ## 2026-03-13: 사이트 배포 중 개별 실패가 전체 중단시키던 문제 수정
 - **사이트별 실패 격리**: `deploy-wp-sites.sh`가 한 사이트 설치 실패 시 전체 종료하지 않고, 실패를 기록한 뒤 다음 사이트 설치를 계속 진행하도록 변경
 - **자동 재시도 추가**: 개별 사이트 설치 실패 시 1회 자동 재시도 후에도 실패하면 목록에 남기고 다음 사이트로 이동
@@ -156,3 +163,4 @@
 | 2026-03-12 | Kevin | Claude Code | Vercel E2E 연동 완료 + dotenv 추가 기록 |
 | 2026-03-12 | Kevin | Claude Code | Fly.io 마이그레이션 기록 추가 |
 | 2026-03-13 | Justin | Claude Code | 기존 발행 글 GEO 재적용 로직 보강 기록 추가 |
+| 2026-03-14 | Kevin | Claude Code | 레포 public 전환 + Admin Basic Auth 기록 추가 |
