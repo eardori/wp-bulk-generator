@@ -34,6 +34,27 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+
+    if (body?.action === "delete-sites") {
+      const res = await bridgeFetch("/credentials/delete-sites", {
+        method: "POST",
+        body: JSON.stringify({
+          slugs: Array.isArray(body.slugs) ? body.slugs : [],
+          domains: Array.isArray(body.domains) ? body.domains : [],
+        }),
+      });
+
+      const text = await res.text();
+      let parsed: unknown = {};
+      try {
+        parsed = text ? JSON.parse(text) : {};
+      } catch {
+        parsed = { error: text || "사이트 삭제 실패" };
+      }
+
+      return Response.json(parsed, { status: res.status });
+    }
+
     const res = await bridgeFetch("/groups", {
       method: "POST",
       body: JSON.stringify(body),
