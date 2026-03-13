@@ -27,6 +27,11 @@
 - **브리지 정규화**: dashboard route가 `sites`, `groups`를 전송 전에 배열 형태로 정규화
 - **프론트 방어 처리**: dashboard page도 SSE payload를 배열로 정규화하고, `error` 이벤트 수신 시 로딩 상태를 안전하게 종료
 
+## 2026-03-13: 유령 사이트 정리 API 추가
+- **EC2 Agent 정리 라우트**: `/credentials/delete-sites` 추가 — credentials/config/groups 파일에서 지정한 slug/domain을 실제로 제거
+- **Vercel 프록시 추가**: `/api/content/delete-sites`에서 bridge key로 정리 라우트를 안전하게 호출 가능
+- **그룹 동기화**: 삭제된 사이트 slug는 그룹 정의에서도 제거하고, 빈 그룹은 함께 정리
+
 ## 2026-03-13: Lightsail Tokyo 인프라 마이그레이션 완료
 - **서버 이전**: EC2 Ireland (108.129.225.228) → Lightsail Tokyo (54.248.12.228)
   - 2 vCPU, 1.9GB RAM, 58GB Disk, Ubuntu 22.04
