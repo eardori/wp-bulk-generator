@@ -424,12 +424,8 @@ async function publishLocallyWithWpCli(
     writeFileSync(
       scriptPath,
       `<?php
-if ($argc < 2) {
-  fwrite(STDERR, "payload path missing");
-  exit(1);
-}
-
-$payload = json_decode(file_get_contents($argv[1]), true);
+$payload_path = ${JSON.stringify(payloadPath)};
+$payload = json_decode(file_get_contents($payload_path), true);
 if (!is_array($payload)) {
   fwrite(STDERR, "invalid payload");
   exit(1);
@@ -502,7 +498,7 @@ echo wp_json_encode([
 
     const output = execFileSync(
       "wp",
-      ["eval-file", scriptPath, payloadPath, `--path=${siteDir}`, "--allow-root"],
+      ["eval-file", scriptPath, `--path=${siteDir}`, "--allow-root"],
       { encoding: "utf8", timeout: 45000 }
     ).trim();
 
