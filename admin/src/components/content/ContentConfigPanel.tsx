@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import type { SiteCredential, TargetQuestion, ContentArticleConfig } from "@/app/content/types";
+import type { SiteCredential, ContentArticleConfig } from "@/app/content/types";
 
 type Props = {
   sites: SiteCredential[];
-  questions: TargetQuestion[];
+  contentPrompt: string;
   onGenerate: (configs: ContentArticleConfig[]) => void;
   onBack: () => void;
 };
@@ -21,7 +21,13 @@ function formatETA(totalArticles: number): string {
   return sec > 0 ? `약 ${min}분 ${sec}초` : `약 ${min}분`;
 }
 
-export default function ContentConfigPanel({ sites, questions, onGenerate, onBack }: Props) {
+function summarizePrompt(prompt: string): string {
+  const normalized = prompt.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > 140 ? `${normalized.slice(0, 140)}...` : normalized;
+}
+
+export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, onBack }: Props) {
   const [configs, setConfigs] = useState<ContentArticleConfig[]>(
     sites.map((s) => ({ siteSlug: s.slug, count: 1, enabled: true }))
   );
@@ -70,24 +76,12 @@ export default function ContentConfigPanel({ sites, questions, onGenerate, onBac
         </div>
       </div>
 
-      {/* 타겟 질문 요약 */}
+      {/* 프롬프트 요약 */}
       <div className="px-4 py-2.5 rounded-xl bg-gray-800/50 border border-gray-700">
         <p className="text-xs text-gray-500 mb-1.5">
-          타겟 질문 {questions.length}개 — 글마다 순서대로 다른 질문이 메인 주제
+          이번 생성에 적용되는 작성 프롬프트
         </p>
-        <div className="flex flex-wrap gap-1.5">
-          {questions.map((q, i) => (
-            <span
-              key={i}
-              className="flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-            >
-              <span className="w-3.5 h-3.5 flex items-center justify-center rounded-full bg-emerald-500/20 text-[9px] font-bold">
-                {i + 1}
-              </span>
-              {q.question}
-            </span>
-          ))}
-        </div>
+        <p className="text-sm text-gray-300 leading-6">{summarizePrompt(contentPrompt)}</p>
       </div>
 
       {/* ── 일괄 설정 바 ── */}

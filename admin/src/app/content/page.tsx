@@ -7,7 +7,6 @@ import type {
   ContentArticleConfig,
   ScrapedProduct,
   SiteCredential,
-  TargetQuestion,
   GeneratedArticle,
   ReviewCollection,
   ProductReview,
@@ -23,7 +22,7 @@ import ContentConfigPanel from "@/components/content/ContentConfigPanel";
 export default function ContentPage() {
   const [step, setStep] = useState<ContentStep>("input");
   const [productUrl, setProductUrl] = useState("");
-  const [questions, setQuestions] = useState<TargetQuestion[]>([]);
+  const [contentPrompt, setContentPrompt] = useState("");
   const [product, setProduct] = useState<ScrapedProduct | null>(null);
   const [sites, setSites] = useState<SiteCredential[]>([]);
   const [selectedSites, setSelectedSites] = useState<SiteCredential[]>([]);
@@ -40,9 +39,9 @@ export default function ContentPage() {
   const [savedTotalArticles, setSavedTotalArticles] = useState(0);
 
   // Step 1 → 2: Scrape product
-  const handleScrape = async (url: string, qs: TargetQuestion[]) => {
+  const handleScrape = async (url: string, prompt: string) => {
     setProductUrl(url);
-    setQuestions(qs);
+    setContentPrompt(prompt);
     setStep("scraping");
     setLog(["상품 페이지 스크랩 중..."]);
 
@@ -223,7 +222,7 @@ export default function ContentPage() {
             vercelEndpoint: "/api/content/generate-articles",
             body: {
               product,
-              targetQuestions: questions,
+              contentPrompt,
               siteConfigs,
               reviewCollection,
               offset,
@@ -376,6 +375,8 @@ export default function ContentPage() {
 
   const handleReset = () => {
     setStep("input");
+    setProductUrl("");
+    setContentPrompt("");
     setProduct(null);
     setArticles([]);
     setLog([]);
@@ -404,7 +405,7 @@ export default function ContentPage() {
       <div>
         <h2 className="text-2xl font-bold text-white">콘텐츠 제작</h2>
         <p className="text-gray-400 mt-1">
-          제품 링크와 타겟 질문을 입력하면, 실구매자 리뷰 분석 기반으로 페르소나별 SEO 글을 자동 생성합니다.
+          제품 링크와 작성 프롬프트를 입력하면, 실구매자 리뷰 분석 기반으로 페르소나별 SEO 글을 자동 생성합니다.
         </p>
       </div>
 
@@ -503,7 +504,7 @@ export default function ContentPage() {
       {step === "content-config" && (
         <ContentConfigPanel
           sites={sites}
-          questions={questions}
+          contentPrompt={contentPrompt}
           onGenerate={handleGenerate}
           onBack={() => (reviewCollection ? setStep("reviews-ready") : setStep("scraped"))}
         />

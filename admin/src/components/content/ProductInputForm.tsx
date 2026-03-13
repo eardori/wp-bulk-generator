@@ -1,74 +1,46 @@
 "use client";
 
 import { useState } from "react";
-import type { TargetQuestion } from "@/app/content/types";
-
-const INTENT_OPTIONS = [
-  { value: "recommendation", label: "추천" },
-  { value: "comparison", label: "비교" },
-  { value: "review", label: "리뷰" },
-  { value: "howto", label: "사용법" },
-] as const;
-
-const QUESTION_PRESETS = [
-  { label: "건성 피부 화장품", q: "건성 피부에 좋은 화장품 추천", intent: "recommendation" as const },
-  { label: "30대 남성 영양제", q: "30대 남자한테 좋은 영양제 추천", intent: "recommendation" as const },
-  { label: "민감성 피부 선크림", q: "민감성 피부 선크림 추천", intent: "recommendation" as const },
-  { label: "다이어트 보조제", q: "다이어트에 효과적인 보조제 추천", intent: "recommendation" as const },
-  { label: "제품 성분 분석", q: "이 제품 성분 안전한가요?", intent: "review" as const },
-  { label: "사용법 가이드", q: "올바른 사용법과 순서", intent: "howto" as const },
-];
-
-const MAX_QUESTIONS = 5;
 
 type Props = {
-  onScrape: (url: string, questions: TargetQuestion[]) => void;
+  onScrape: (url: string, contentPrompt: string) => void;
   isLoading: boolean;
 };
 
+const PROMPT_PRESETS = [
+  {
+    label: "AEO형",
+    prompt:
+      "핵심 질문에 직접 답하는 구조로 작성하고, 첫 문단에서 결론을 먼저 제시해줘. 제목과 H2는 검색 의도를 명확하게 드러내고, 브랜드명은 일관되게 사용해줘.",
+  },
+  {
+    label: "후기형",
+    prompt:
+      "실구매 리뷰를 근거로 장점과 단점을 균형 있게 정리해줘. 과장 없이 신뢰감 있는 톤으로 쓰고, 실제 사용자에게 맞는 경우와 안 맞는 경우를 분리해서 설명해줘.",
+  },
+  {
+    label: "비교형",
+    prompt:
+      "비슷한 대안과 비교해 선택 포인트가 드러나게 써줘. 가격, 사용감, 추천 대상 차이를 표와 요약 박스로 정리해줘.",
+  },
+];
+
 export default function ProductInputForm({ onScrape, isLoading }: Props) {
   const [url, setUrl] = useState("");
-  const [questions, setQuestions] = useState<TargetQuestion[]>([
-    { question: "", intent: "recommendation" },
-  ]);
+  const [contentPrompt, setContentPrompt] = useState("");
   const [error, setError] = useState("");
-
-  const addQuestion = () => {
-    if (questions.length < MAX_QUESTIONS) {
-      setQuestions([...questions, { question: "", intent: "recommendation" }]);
-    }
-  };
-
-  const removeQuestion = (idx: number) => {
-    setQuestions(questions.filter((_, i) => i !== idx));
-  };
-
-  const updateQuestion = (idx: number, field: keyof TargetQuestion, value: string) => {
-    setQuestions(questions.map((q, i) => (i === idx ? { ...q, [field]: value } : q)));
-  };
-
-  const applyPreset = (preset: (typeof QUESTION_PRESETS)[number]) => {
-    const emptyIdx = questions.findIndex((q) => !q.question.trim());
-    if (emptyIdx >= 0) {
-      updateQuestion(emptyIdx, "question", preset.q);
-      updateQuestion(emptyIdx, "intent", preset.intent);
-    } else if (questions.length < MAX_QUESTIONS) {
-      setQuestions([...questions, { question: preset.q, intent: preset.intent }]);
-    }
-  };
 
   const handleSubmit = () => {
     if (!url.trim()) {
       setError("제품 URL을 입력해주세요.");
       return;
     }
-    const validQuestions = questions.filter((q) => q.question.trim());
-    if (validQuestions.length === 0) {
-      setError("타겟 질문을 최소 1개 입력해주세요.");
+    if (!contentPrompt.trim()) {
+      setError("콘텐츠 작성 프롬프트를 입력해주세요.");
       return;
     }
     setError("");
-    onScrape(url.trim(), validQuestions);
+    onScrape(url.trim(), contentPrompt.trim());
   };
 
   return (
@@ -86,65 +58,38 @@ export default function ProductInputForm({ onScrape, isLoading }: Props) {
         <p className="text-xs text-gray-500">네이버 스마트스토어/브랜드스토어: 실구매자 리뷰 자동 수집 · 쿠팡, 올리브영, 11번가 등 지원</p>
       </div>
 
-      {/* Target Questions */}
+      {/* Content Prompt */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <label className="block text-sm font-medium text-gray-300">
-            타겟 질문 (AI가 물어볼 만한 질문)
+            콘텐츠 작성 프롬프트
           </label>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-gray-500">최대 {MAX_QUESTIONS}개</span>
-            <button
-              onClick={addQuestion}
-              disabled={questions.length >= MAX_QUESTIONS}
-              className="text-xs text-emerald-400 hover:text-emerald-300 disabled:text-gray-600 transition-colors"
-            >
-              + 질문 추가
-            </button>
-          </div>
+          <span className="text-xs text-gray-500">길게 적어도 됩니다</span>
         </div>
 
-        {questions.map((q, i) => (
-          <div key={i} className="flex gap-3 items-start">
-            <div className="flex-1">
-              <input
-                type="text"
-                value={q.question}
-                onChange={(e) => updateQuestion(i, "question", e.target.value)}
-                placeholder={`예: "건성 피부에 좋은 화장품 추천"`}
-                className="w-full px-4 py-2.5 rounded-lg bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 text-sm"
-              />
-            </div>
-            <select
-              value={q.intent}
-              onChange={(e) => updateQuestion(i, "intent", e.target.value)}
-              className="px-3 py-2.5 rounded-lg bg-gray-800 border border-gray-700 text-gray-300 text-sm focus:outline-none"
-            >
-              {INTENT_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            {questions.length > 1 && (
-              <button
-                onClick={() => removeQuestion(i)}
-                className="mt-2 text-gray-500 hover:text-red-400 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-          </div>
-        ))}
+        <textarea
+          value={contentPrompt}
+          onChange={(e) => setContentPrompt(e.target.value)}
+          rows={10}
+          placeholder={`예시:
+핵심 질문에 바로 답하는 AEO 스타일로 작성해줘.
+브랜드명은 본문 전체에서 일관되게 사용하고, 실구매 리뷰를 근거로 장단점을 균형 있게 정리해줘.
+첫 문단에서 결론을 먼저 제시하고, 1500자 이상으로 써줘.`}
+          className="w-full px-4 py-4 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-sm leading-6 resize-y min-h-[240px]"
+        />
+        <p className="text-xs text-gray-500">
+          원하는 톤, 핵심 질문, 브랜드명 사용 규칙, 포함할 근거, 금지할 표현까지 자유롭게 적으면 그 프롬프트를 기준으로 글을 생성합니다.
+        </p>
 
-        {/* Presets */}
         <div className="flex flex-wrap gap-2 pt-2">
-          {QUESTION_PRESETS.map((preset) => (
+          {PROMPT_PRESETS.map((preset) => (
             <button
               key={preset.label}
-              onClick={() => applyPreset(preset)}
+              onClick={() =>
+                setContentPrompt((prev) =>
+                  prev.trim() ? `${prev.trim()}\n\n${preset.prompt}` : preset.prompt
+                )
+              }
               className="px-3 py-1 text-xs rounded-full border border-gray-700 text-gray-400 hover:border-emerald-500 hover:text-emerald-400 transition-all"
             >
               {preset.label}

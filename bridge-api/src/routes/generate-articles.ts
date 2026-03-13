@@ -12,11 +12,6 @@ import type {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type TargetQuestion = {
-  question: string;
-  intent: "recommendation" | "comparison" | "review" | "howto";
-};
-
 type FAQItem = {
   question: string;
   answer: string;
@@ -64,7 +59,6 @@ type GeneratedArticle = {
 
 type ArticleTask = {
   site: SiteCredential;
-  questionIndex: number;
   articleVariation: number;
 };
 
@@ -131,6 +125,18 @@ function estimateVisibleWordCount(html: string) {
   const text = $.text().replace(/\s+/g, " ").trim();
   const matches = text.match(/[\p{L}\p{N}]+/gu);
   return matches?.length ?? 0;
+}
+
+function normalizeContentPrompt(prompt: string): string {
+  return (prompt || "").replace(/\r\n/g, "\n").trim();
+}
+
+function summarizeContentPrompt(prompt: string, limit = 90): string {
+  const normalized = normalizeContentPrompt(prompt).replace(/\s+/g, " ");
+  if (!normalized) {
+    return "사용자 프롬프트 기반";
+  }
+  return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
 }
 
 function pickRepresentativeReviews(indexedReviews: IndexedReview[]) {
@@ -532,20 +538,22 @@ function buildPlaceReviewPromptSection(reviews: ProductReview[], articleVariatio
 async function generateForSite(
   apiKey: string,
   product: ScrapedProduct,
-  primaryQuestion: TargetQuestion,
-  otherQuestions: TargetQuestion[],
+  contentPrompt: string,
   site: SiteCredential,
   reviewCollection?: ReviewCollection,
   articleVariation = 0,
 ): Promise<GeneratedArticle> {
   const persona = normalizePersona(site);
   const sourceTitle = product.title?.trim() || site.title || site.slug;
+  const normalizedPrompt = normalizeContentPrompt(contentPrompt);
+  const promptSummary = summarizeContentPrompt(normalizedPrompt);
+  const promptInstructionBlock = `## 사용자 작성 프롬프트 (반드시 반영):
+${normalizedPrompt}
 
-  const primaryLine = `"${primaryQuestion.question}" (의도: ${primaryQuestion.intent})`;
-  const otherQuestionsList =
-    otherQuestions.length > 0
-      ? otherQuestions.map((q, i) => `${i + 1}. "${q.question}"`).join("\n")
-      : "";
+## 프롬프트 반영 원칙:
+- 위 프롬프트의 핵심 질문, 원하는 톤, 구조, 강조 포인트, 금지 사항을 최우선으로 반영할 것
+- 단, 리뷰/상품 데이터와 충돌하는 내용은 지어내지 말고 실제 데이터 기준으로만 해석할 것
+- 프롬프트의 문장을 그대로 복붙하지 말고, 최종 블로그 글 안에서 자연스럽게 소화할 것`;
 
   const specsSummary =
     Object.keys(product.specs).length > 0
@@ -806,8 +814,7 @@ ${variationHint}
 - 설명: ${product.description || ""}
 ${placeInfo}${reviewsSection}
 
-## 메인 타겟 질문 (이 글의 핵심 주제):
-"${primaryQuestion.question}" (의도: ${primaryQuestion.intent})
+${promptInstructionBlock}
 
 ## 이번 글의 구조 콘셉트:
 - 글쓰기 각도: ${thisRestaurantAngleConfig!.label}
@@ -815,10 +822,9 @@ ${placeInfo}${reviewsSection}
 - ${thisRestaurantAngleConfig!.h2Structure}
 - 전개 원칙: 이번 리뷰 묶음에서 자주 나온 메뉴/분위기/주의점을 중심으로 내용을 채우고, 이전 글과 표현을 겹치지 말 것
 
-${otherQuestionsList ? `## 보조 질문 (본문에서 자연스럽게 언급):\n${otherQuestionsList}\n` : ""}
 ## 작성 규칙:
 1. 글 최상단에 <div class="summary-box"> 요약 박스 필수: 가게명/위치/분위기/추천 메뉴/가격대를 한눈에 파악할 수 있도록
-2. 첫 문단에서 메인 질문에 대한 한 문장 명확한 결론 먼저 (Bottom Line Up Front)
+2. 첫 문단에서 사용자 프롬프트의 핵심 요청에 대한 한 문장 결론 먼저 제시 (Bottom Line Up Front)
 3. 위 구조 콘셉트의 제목 형식과 H2 순서를 반드시 지킬 것
 4. 실방문자 리뷰에서 반복되는 키워드/의견을 인용하여 "많은 방문자들이 공통적으로..." 형식으로 서술
 5. 대표 리뷰 근거 섹션의 포인트를 서로 다른 H2에 분산 배치하여 같은 문단 톤이 반복되지 않게 할 것
@@ -911,7 +917,7 @@ JSON 형식으로 응답하세요:
       siteDomain: site.domain,
       personaName: persona.name,
       sourceTitle,
-      targetQuestion: primaryQuestion.question,
+      targetQuestion: promptSummary,
       title: parsed.title || product.title,
       metaTitle: parsed.metaTitle || parsed.title || "",
       metaDescription: parsed.metaDescription || "",
@@ -930,13 +936,13 @@ JSON 형식으로 응답하세요:
 
   // ── 일반 제품 리뷰 프롬프트 ──────────────────────────────
   const prompt = `당신은 "${persona.name}"입니다. ${persona.bio || ""}
-	나이: ${persona.age}세
-	전문분야: ${persona.expertise}
-	주요 관심사: ${persona.concern}
-	글쓰기 톤: ${persona.tone}
-	${variationHint}
-	아래 제품 정보와 실구매자 리뷰 데이터를 바탕으로, 당신의 페르소나에 맞는 SEO 최적화 블로그 글을 작성하세요.
-	${reviewIntro}
+		나이: ${persona.age}세
+		전문분야: ${persona.expertise}
+		주요 관심사: ${persona.concern}
+		글쓰기 톤: ${persona.tone}
+		${variationHint}
+		아래 제품 정보와 실구매자 리뷰 데이터를 바탕으로, 당신의 페르소나에 맞는 SEO 최적화 블로그 글을 작성하세요.
+		${reviewIntro}
 
 ## 제품 정보:
 - 제품명: ${product.title}
@@ -945,8 +951,7 @@ JSON 형식으로 응답하세요:
 - 제품 URL: ${product.url}
 - 설명/키워드: ${product.description || "정보 없음"}${specsSummary}${reviewSection}
 
-## 메인 타겟 질문 (이 글의 핵심 주제):
-${primaryLine}
+${promptInstructionBlock}
 
 ## 이번 글의 구조 콘셉트:
 - 글쓰기 각도: ${thisProductAngleConfig.label}
@@ -954,13 +959,12 @@ ${primaryLine}
 - ${thisProductAngleConfig.h2Structure}
 - 강조 포인트: ${thisProductAngleConfig.emphasis}
 
-	${otherQuestionsList ? `## 보조 타겟 질문 (본문에서 자연스럽게 언급):\n${otherQuestionsList}\n` : ""}
-	## 작성 규칙:
-	1. ${reviewRule1}
-	2. ${reviewRule2}
-	3. 메인 타겟 질문을 글의 제목/도입부/결론의 핵심으로 활용
-	4. 글 최상단에 <div class="summary-box"> 요약 박스 필수: 메인 질문에 대한 2~3문장 직접 답변 + 핵심 포인트 3개 bullet (AI 검색·AI 개요 직접 인용 대상)
-	5. 첫 번째 문단에서 메인 질문에 대한 한 문장 명확한 결론 먼저 제시 (Bottom Line Up Front)
+		## 작성 규칙:
+		1. ${reviewRule1}
+		2. ${reviewRule2}
+		3. 사용자 프롬프트의 핵심 요청을 글의 제목/도입부/결론의 중심에 둘 것
+		4. 글 최상단에 <div class="summary-box"> 요약 박스 필수: 사용자 프롬프트의 핵심 요청에 대한 2~3문장 직접 답변 + 핵심 포인트 3개 bullet (AI 검색·AI 개요 직접 인용 대상)
+		5. 첫 번째 문단에서 사용자 프롬프트 핵심 요청에 대한 한 문장 명확한 결론 먼저 제시 (Bottom Line Up Front)
 	6. 위 구조 콘셉트의 제목 형식과 H2 흐름을 반드시 지킬 것
 	7. ${reviewRule7}
 	8. 본문 내 구체적 수치 필수: ${numericRule}
@@ -1082,7 +1086,7 @@ JSON 형식으로 응답하세요:
     siteDomain: site.domain,
     personaName: persona.name,
     sourceTitle,
-    targetQuestion: primaryQuestion.question,
+    targetQuestion: promptSummary,
     title: parsed.title,
     metaTitle: parsed.metaTitle || parsed.title,
     metaDescription: parsed.metaDescription || parsed.excerpt || "",
@@ -1105,7 +1109,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
   app.post("/generate-articles", async (req, reply) => {
     const {
       product,
-      targetQuestions,
+      contentPrompt,
       siteConfigs,
       reviewCollection,
       offset = 0,
@@ -1113,7 +1117,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
       globalTotal,
     } = req.body as {
       product: ScrapedProduct;
-      targetQuestions: TargetQuestion[];
+      contentPrompt: string;
       siteConfigs: { site: SiteCredential; count: number }[];
       reviewCollection?: ReviewCollection;
       offset?: number;
@@ -1121,7 +1125,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
       globalTotal?: number;
     };
 
-    if (!product || !targetQuestions?.length || !siteConfigs?.length) {
+    if (!product || !contentPrompt?.trim() || !siteConfigs?.length) {
       return reply.status(400).send({ error: "필수 데이터가 누락되었습니다." });
     }
 
@@ -1134,13 +1138,14 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
     const allTasks: ArticleTask[] = [];
     for (const { site, count } of siteConfigs) {
       for (let i = 0; i < count; i++) {
-        allTasks.push({ site, questionIndex: i % targetQuestions.length, articleVariation: i });
+        allTasks.push({ site, articleVariation: i });
       }
     }
 
     const batchTasks = limit != null ? allTasks.slice(offset, offset + limit) : allTasks.slice(offset);
     const total = globalTotal ?? allTasks.length;
     const PARALLEL = 3;
+    const promptSummary = summarizeContentPrompt(contentPrompt);
 
     const { send, close } = setupSSE(reply);
 
@@ -1153,16 +1158,14 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
         const parallelSlice = batchTasks.slice(i, i + PARALLEL);
 
         const results = await Promise.allSettled(
-          parallelSlice.map(async ({ site, questionIndex, articleVariation }, sliceIdx) => {
+          parallelSlice.map(async ({ site, articleVariation }, sliceIdx) => {
             const globalNum = offset + i + sliceIdx + 1;
-            const primaryQuestion = targetQuestions[questionIndex];
-            const otherQuestions = targetQuestions.filter((_, idx) => idx !== questionIndex);
 
             send({
               type: "progress",
               current: globalNum,
               total,
-              message: `[${globalNum}/${total}] ${normalizePersona(site).name} — "${primaryQuestion.question}" 생성 중...`,
+              message: `[${globalNum}/${total}] ${normalizePersona(site).name} — "${promptSummary}" 생성 중...`,
             });
 
             // 최대 5회 재시도 — 429는 지수 백오프
@@ -1175,7 +1178,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
                   send({ type: "progress", current: globalNum, total, message: `[${globalNum}/${total}] ⏳ 429 재시도 ${attempt}/4 — ${waitSec}초 대기 중...` });
                   await new Promise((r) => setTimeout(r, waitSec * 1000));
                 }
-                return await generateForSite(apiKey, product, primaryQuestion, otherQuestions, site, reviewCollection, articleVariation);
+                return await generateForSite(apiKey, product, contentPrompt, site, reviewCollection, articleVariation);
               } catch (err) {
                 lastErr = err instanceof Error ? err : new Error(String(err));
                 const is429 = lastErr.message.includes("429") || lastErr.message.includes("RESOURCE_EXHAUSTED");
