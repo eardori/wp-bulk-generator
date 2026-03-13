@@ -12,7 +12,7 @@ import { groupsRoutes } from "./routes/groups.js";
 import { reservedSlugsRoutes } from "./routes/reserved-slugs.js";
 import { deployRoutes } from "./routes/deploy.js";
 
-const PORT = Number(process.env.PORT) || 4001;
+const PORT = Number(process.env.EC2_AGENT_PORT) || 4001;
 const HOST = process.env.HOST || "127.0.0.1";
 
 const app = Fastify({
