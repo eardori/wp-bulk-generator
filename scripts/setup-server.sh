@@ -9,8 +9,8 @@ echo "=== WordPress 대량 호스팅 서버 세팅 시작 ==="
 
 # ---- 0. Swap 추가 (RAM 부족 대비) ----
 if [ ! -f /swapfile ]; then
-  echo "--- Swap 4GB 생성 ---"
-  fallocate -l 4G /swapfile
+  echo "--- Swap 2GB 생성 ---"
+  fallocate -l 2G /swapfile
   chmod 600 /swapfile
   mkswap /swapfile
   swapon /swapfile
@@ -18,7 +18,7 @@ if [ ! -f /swapfile ]; then
   # Swap 사용 최소화 (RAM 우선)
   sysctl vm.swappiness=10
   echo 'vm.swappiness=10' >> /etc/sysctl.conf
-  echo "Swap 4GB 추가 완료"
+  echo "Swap 2GB 추가 완료"
 else
   echo "Swap 이미 존재함 — 스킵"
 fi
@@ -66,7 +66,7 @@ listen.group = www-data
 
 ; 저메모리 최적화 — ondemand로 유휴 시 메모리 해제
 pm = ondemand
-pm.max_children = 7
+pm.max_children = 15
 pm.process_idle_timeout = 30s
 pm.max_requests = 300
 request_terminate_timeout = 120s
@@ -100,8 +100,8 @@ apt-get install -y mariadb-server mariadb-client
 cat > /etc/mysql/mariadb.conf.d/99-optimized.cnf << 'MARIADB'
 [mysqld]
 # 저메모리 최적화
-innodb_buffer_pool_size = 128M
-innodb_log_file_size = 32M
+innodb_buffer_pool_size = 256M
+innodb_log_file_size = 48M
 innodb_flush_log_at_trx_commit = 2
 innodb_flush_method = O_DIRECT
 
@@ -111,7 +111,7 @@ query_cache_size = 16M
 query_cache_limit = 1M
 
 # 커넥션
-max_connections = 50
+max_connections = 75
 wait_timeout = 60
 interactive_timeout = 60
 
@@ -139,7 +139,7 @@ echo "--- Redis 설치 ---"
 apt-get install -y redis-server
 
 # Redis 메모리 제한
-sed -i 's/^# maxmemory .*/maxmemory 32mb/' /etc/redis/redis.conf
+sed -i 's/^# maxmemory .*/maxmemory 64mb/' /etc/redis/redis.conf
 sed -i 's/^# maxmemory-policy .*/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
 
 systemctl enable redis-server
@@ -169,7 +169,7 @@ pid /run/nginx.pid;
 include /etc/nginx/modules-enabled/*.conf;
 
 events {
-    worker_connections 512;
+    worker_connections 1024;
     multi_accept on;
 }
 
@@ -223,6 +223,7 @@ echo "--- 방화벽 설정 ---"
 ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
+ufw allow 4000/tcp  # Bridge API (외부 SSE 접근)
 ufw --force enable
 
 # ---- 완료 ----

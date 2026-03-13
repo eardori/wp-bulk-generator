@@ -1,4 +1,4 @@
-name: Deploy EC2 Agent
+name: Deploy Bridge API + EC2 Agent
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 
 jobs:
   deploy:
-    name: Deploy EC2 Agent to EC2
+    name: Deploy to Lightsail
     runs-on: ubuntu-latest
 
     steps:
@@ -30,7 +30,7 @@ jobs:
             StrictHostKeyChecking no
           EOF
 
-      - name: Pull & build EC2 Agent
+      - name: Pull & build
         run: |
           ssh deploy-server << 'ENDSSH'
             cd /home/ubuntu/wp-bulk-generator
@@ -41,15 +41,32 @@ jobs:
             npm run build
           ENDSSH
 
-      - name: Restart EC2 Agent
+      - name: Restart services
         run: |
           ssh deploy-server << 'ENDSSH'
+            # EC2 Agent (localhost only, 파일시스템 접근)
+            pm2 delete ec2-agent 2>/dev/null || true
+            pm2 start /home/ubuntu/wp-bulk-generator/bridge-api/dist/ec2-agent.js \
+              --name ec2-agent \
+              --cwd /home/ubuntu/wp-bulk-generator/bridge-api \
+              --max-memory-restart 100M
+
+            # Bridge API (외부 접근, Playwright + AI 생성)
             pm2 delete wp-bridge-api 2>/dev/null || true
-            pm2 restart ec2-agent || pm2 start /home/ubuntu/wp-bulk-generator/bridge-api/dist/ec2-agent.js --name ec2-agent --max-memory-restart 100M
+            pm2 start /home/ubuntu/wp-bulk-generator/bridge-api/dist/server.js \
+              --name wp-bridge-api \
+              --cwd /home/ubuntu/wp-bulk-generator/bridge-api \
+              --max-memory-restart 250M
+
             pm2 save
           ENDSSH
 
       - name: Health check
         run: |
-          sleep 3
-          ssh deploy-server "curl -sf http://localhost:4001/health > /dev/null && echo 'EC2 Agent health check passed' || echo 'EC2 Agent health check failed'"
+          sleep 5
+          ssh deploy-server << 'ENDSSH'
+            echo "--- EC2 Agent ---"
+            curl -sf http://localhost:4001/health && echo ' OK' || echo ' FAIL'
+            echo "--- Bridge API ---"
+            curl -sf http://localhost:4000/health && echo ' OK' || echo ' FAIL'
+          ENDSSH
