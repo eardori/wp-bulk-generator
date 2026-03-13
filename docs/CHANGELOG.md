@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-03-14: GEO Phase 2 기존 글 일괄 적용 완료
+
+- **seo-optimize 실행**: 전체 사이트 82개 글에 GEO Phase 2 일괄 적용 (Product/Review 스키마 + 내부 링크 + llms-full.txt)
+- **Vercel 환경변수 설정 완료**: `ADMIN_USER`/`ADMIN_PASS` 적용 → Admin Basic Auth 활성화
+- **Justin collaborator 추가 완료**: GitHub 협업 권한 부여
+
 ## 2026-03-14: GEO Phase 2 — Product 스키마 + 내부 링크 + llms-full.txt
 
 - **Product/Review 스키마 추가**: 상품 리뷰 글에 Product + Review + AggregateOffer JSON-LD 자동 주입 (가격/평점 추출)
