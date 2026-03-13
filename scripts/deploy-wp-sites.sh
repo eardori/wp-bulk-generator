@@ -350,6 +350,12 @@ server {
         default_type text/plain;
     }
 
+    location = /llms-full.txt {
+        access_log off;
+        log_not_found off;
+        default_type text/plain;
+    }
+
     location ~ /sitemap.*\\.xml\$ {
         try_files \$uri /index.php?\$args;
         expires 5m;
@@ -421,6 +427,12 @@ server {
     }
 
     location = /llms.txt {
+        access_log off;
+        log_not_found off;
+        default_type text/plain;
+    }
+
+    location = /llms-full.txt {
         access_log off;
         log_not_found off;
         default_type text/plain;

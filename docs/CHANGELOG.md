@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-14: GEO Phase 2 — Product 스키마 + 내부 링크 + llms-full.txt
+
+- **Product/Review 스키마 추가**: 상품 리뷰 글에 Product + Review + AggregateOffer JSON-LD 자동 주입 (가격/평점 추출)
+- **내부 링크 자동 생성**: 발행 시 같은 사이트의 관련 글 3개를 본문 하단에 "관련 글 추천" 섹션으로 추가 (Topical Authority 강화)
+- **llms-full.txt 자동 갱신**: 발행/SEO최적화 완료 후 글 제목+링크+요약 포함한 llms-full.txt 자동 생성
+- **기존 글 일괄 적용**: seo-optimize가 기존 글에도 Product 스키마 + 내부 링크 + llms-full.txt 모두 적용
+- **Nginx llms-full.txt 서빙**: deploy-wp-sites.sh에 llms-full.txt location 블록 추가
+
 ## 2026-03-14: 레포 공개 전환 + Admin 보안
 
 - **GitHub 레포 public 전환**: Vercel Hobby 플랜 협업 제한 해소 (collaborator push → 자동 배포)
@@ -164,3 +172,4 @@
 | 2026-03-12 | Kevin | Claude Code | Fly.io 마이그레이션 기록 추가 |
 | 2026-03-13 | Justin | Claude Code | 기존 발행 글 GEO 재적용 로직 보강 기록 추가 |
 | 2026-03-14 | Kevin | Claude Code | 레포 public 전환 + Admin Basic Auth 기록 추가 |
+| 2026-03-14 | Kevin | Claude Code | GEO Phase 2: Product 스키마 + 내부 링크 + llms-full.txt |

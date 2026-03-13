@@ -160,7 +160,70 @@ function buildSchemaBlocks(
     schemas += `\n<script type="application/ld+json">${JSON.stringify(faqJsonLd)}</script>`;
   }
 
+  // Product + Review 스키마 (GEO: LLM이 상품 평점/가격 인용 가능)
+  const productSchema = buildProductSchemaFromPost(post, site, contentHtml);
+  if (productSchema) {
+    schemas += `\n<script type="application/ld+json">${JSON.stringify(productSchema)}</script>`;
+  }
+
   return schemas;
+}
+
+function buildProductSchemaFromPost(
+  post: WPPost,
+  site: SiteCredential,
+  contentHtml: string
+): Record<string, unknown> | null {
+  const plainTitle = stripHtml(post.title.rendered);
+
+  // 가격 추출
+  const priceMatches = contentHtml.match(/(\d{1,3}(?:,\d{3})*)\s*원/g);
+  // 평점 추출
+  const ratingMatch = contentHtml.match(/(\d(?:\.\d)?)\s*(?:점|\/\s*5)/);
+
+  // 가격이나 평점이 없으면 상품 리뷰 글이 아닐 가능성 → 스킵
+  if (!priceMatches && !ratingMatch) return null;
+
+  const review: Record<string, unknown> = {
+    "@type": "Review",
+    "author": {
+      "@type": "Person",
+      "name": site.persona?.name || site.admin_user,
+    },
+    "reviewBody": stripHtml(post.excerpt.rendered).slice(0, 200),
+  };
+
+  if (ratingMatch) {
+    review["reviewRating"] = {
+      "@type": "Rating",
+      "ratingValue": ratingMatch[1],
+      "bestRating": "5",
+    };
+  }
+
+  const product: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "name": plainTitle.replace(/\s*(추천|비교|리뷰|TOP\s*\d+|순위|가이드).*$/i, "").trim() || plainTitle,
+    "description": stripHtml(post.excerpt.rendered).slice(0, 160),
+    "review": review,
+  };
+
+  if (priceMatches && priceMatches.length > 0) {
+    const prices = priceMatches
+      .map(p => parseInt(p.replace(/[,원\s]/g, ""), 10))
+      .filter(p => p > 0 && p < 10_000_000);
+    if (prices.length > 0) {
+      product["offers"] = {
+        "@type": "AggregateOffer",
+        "priceCurrency": "KRW",
+        "lowPrice": Math.min(...prices),
+        "highPrice": Math.max(...prices),
+      };
+    }
+  }
+
+  return product;
 }
 
 function improveImageAlts(html: string, postTitle: string): string {
@@ -190,6 +253,53 @@ function improveImageAlts(html: string, postTitle: string): string {
   });
 
   return $.html();
+}
+
+// ── llms-full.txt ────────────────────────────────────────────────────────────
+
+async function updateLlmsFullTxt(site: SiteCredential, posts: WPPost[]): Promise<void> {
+  const baseUrl = site.url.replace(/\/$/, "");
+  const auth = Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
+
+  const articleLines = posts
+    .slice(0, 50)
+    .map(p => {
+      const title = stripHtml(p.title.rendered);
+      const desc = stripHtml(p.excerpt.rendered).slice(0, 80);
+      return `- [${title}](${p.link}): ${desc}`;
+    })
+    .join("\n");
+
+  const llmsContent = `# ${site.title}
+> ${site.persona?.name || site.admin_user}의 리뷰 사이트
+
+## About
+- Author: ${site.persona?.name || site.admin_user}
+- Site: ${baseUrl}
+- Content: Product reviews and buying guides in Korean
+- Total Articles: ${posts.length}
+
+## Articles
+${articleLines}
+
+## Navigation
+- [Homepage](${baseUrl}): Latest reviews and recommendations
+- [Sitemap](${baseUrl}/sitemap_index.xml): All published articles
+`;
+
+  // WP REST API로 llms-full.txt 업데이트 (wp-cli가 있으면 파일 직접 쓰기)
+  const WP_SITES_ROOT = process.env.WP_SITES_ROOT || "/var/www";
+  const siteDir = `${WP_SITES_ROOT}/${site.slug}`;
+  try {
+    const { existsSync, writeFileSync } = await import("fs");
+    if (existsSync(`${siteDir}/wp-config.php`)) {
+      writeFileSync(`${siteDir}/llms-full.txt`, llmsContent);
+      // 기존 llms.txt도 갱신
+      writeFileSync(`${siteDir}/llms.txt`, llmsContent);
+    }
+  } catch {
+    // best-effort
+  }
 }
 
 // ── Route ────────────────────────────────────────────────────────────────────
@@ -255,30 +365,55 @@ export async function seoOptimizeRoutes(app: FastifyInstance) {
           continue;
         }
 
-        // Paginate through all posts
+        // 전체 글 목록 수집 (내부 링크 + llms-full.txt용)
+        const allSitePosts: WPPost[] = [];
         const PER_PAGE = 10;
         let siteUpdated = 0;
         let siteSkipped = 0;
 
-        for (let page = 1; page <= Math.ceil(totalPosts / PER_PAGE); page++) {
-          let posts: WPPost[];
+        for (let prefetchPage = 1; prefetchPage <= Math.ceil(totalPosts / PER_PAGE); prefetchPage++) {
           try {
             const res = await fetch(
-              `${baseUrl}/wp-json/wp/v2/posts?per_page=${PER_PAGE}&page=${page}&_fields=id,title,content,excerpt,link,date,modified,slug,categories,tags&status=publish`,
+              `${baseUrl}/wp-json/wp/v2/posts?per_page=${PER_PAGE}&page=${prefetchPage}&_fields=id,title,content,excerpt,link,date,modified,slug,categories,tags&status=publish`,
               { headers, cache: "no-store" }
             );
             if (!res.ok) break;
-            posts = await res.json();
+            const posts = await res.json() as WPPost[];
+            allSitePosts.push(...posts);
           } catch {
             break;
           }
+        }
 
-          for (const post of posts) {
+        for (const post of allSitePosts) {
             const plainTitle = stripHtml(post.title.rendered);
             const contentWithoutSchemas = stripJsonLdScripts(post.content.rendered);
 
+            // 기존 related-posts div 제거 후 재생성
+            const $ = cheerio.load(contentWithoutSchemas, null, false);
+            $(".related-posts").remove();
+            const cleanedContent = $.html() || contentWithoutSchemas;
+
+            // 관련 글 내부 링크 생성
+            const relatedPosts = allSitePosts
+              .filter(p => p.id !== post.id)
+              .filter(p => {
+                const sharedCats = p.categories.filter(c => post.categories.includes(c));
+                const sharedTags = p.tags.filter(t => post.tags.includes(t));
+                return sharedCats.length > 0 || sharedTags.length > 0;
+              })
+              .slice(0, 3);
+
+            let relatedHtml = "";
+            if (relatedPosts.length > 0) {
+              const links = relatedPosts
+                .map(p => `<li><a href="${p.link}">${stripHtml(p.title.rendered)}</a></li>`)
+                .join("\n");
+              relatedHtml = `\n<div class="related-posts" style="margin-top:2em;padding:1.2em;background:#f8f9fa;border-radius:8px;">\n<h3>관련 글 추천</h3>\n<ul>${links}</ul>\n</div>`;
+            }
+
             // 기존 JSON-LD를 제거한 뒤 최신 GEO schema를 다시 주입한다.
-            const improvedContent = improveImageAlts(contentWithoutSchemas, post.title.rendered);
+            const improvedContent = improveImageAlts(cleanedContent, post.title.rendered) + relatedHtml;
             const schemaBlocks = buildSchemaBlocks(post, site, improvedContent);
             const currentSchemaSignature = jsonLdSignature(post.content.rendered);
             const desiredSchemaSignature = jsonLdSignature(schemaBlocks);
@@ -352,8 +487,10 @@ export async function seoOptimizeRoutes(app: FastifyInstance) {
                 message: `❌ "${plainTitle}" 오류: ${error instanceof Error ? error.message : "알 수 없음"}`,
               });
             }
-          }
         }
+
+        // llms-full.txt 갱신 (글 목록 포함)
+        await updateLlmsFullTxt(site, allSitePosts);
 
         send({
           type: "site-done",

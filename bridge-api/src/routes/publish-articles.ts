@@ -288,7 +288,111 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
   };
   finalHtml += `\n<script type="application/ld+json">${JSON.stringify(articleJsonLd)}</script>`;
 
+  // Product + Review 스키마 (GEO: 상품 리뷰 글에 구조화된 평점/가격 데이터 제공)
+  const productReviewJsonLd = buildProductReviewSchema(article, site);
+  if (productReviewJsonLd) {
+    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(productReviewJsonLd)}</script>`;
+  }
+
   return finalHtml;
+}
+
+function buildProductReviewSchema(
+  article: GeneratedArticle,
+  site: SiteCredential
+): Record<string, unknown> | null {
+  const content = article.htmlContent;
+  // 가격 정보 추출 (예: 15,900원, 29,800원)
+  const priceMatches = content.match(/(\d{1,3}(?:,\d{3})*)\s*원/g);
+  // 평점 추출 (예: 4.5점, 4.8/5)
+  const ratingMatch = content.match(/(\d(?:\.\d)?)\s*(?:점|\/\s*5)/);
+
+  // 상품명 = sourceTitle (스크래핑된 원본 상품명)
+  if (!article.sourceTitle) return null;
+
+  const review: Record<string, unknown> = {
+    "@type": "Review",
+    "author": {
+      "@type": "Person",
+      "name": site.persona?.name || site.admin_user,
+    },
+    "reviewBody": article.excerpt,
+  };
+
+  if (ratingMatch) {
+    review["reviewRating"] = {
+      "@type": "Rating",
+      "ratingValue": ratingMatch[1],
+      "bestRating": "5",
+    };
+  }
+
+  const product: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "name": article.sourceTitle,
+    "description": article.metaDescription || article.excerpt,
+    "review": review,
+  };
+
+  if (priceMatches && priceMatches.length > 0) {
+    const prices = priceMatches
+      .map(p => parseInt(p.replace(/[,원\s]/g, ""), 10))
+      .filter(p => p > 0 && p < 10_000_000);
+    if (prices.length > 0) {
+      product["offers"] = {
+        "@type": "AggregateOffer",
+        "priceCurrency": "KRW",
+        "lowPrice": Math.min(...prices),
+        "highPrice": Math.max(...prices),
+      };
+    }
+  }
+
+  return product;
+}
+
+async function fetchRelatedPosts(
+  site: SiteCredential,
+  currentSlug: string,
+  category: string,
+  maxPosts = 3
+): Promise<Array<{ title: string; url: string }>> {
+  const baseUrl = site.url.replace(/\/$/, "");
+  const authHeader = "Basic " + Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
+
+  try {
+    // 같은 카테고리의 최근 글 가져오기
+    const res = await fetch(
+      `${baseUrl}/wp-json/wp/v2/posts?per_page=${maxPosts + 1}&_fields=id,title,link,slug&status=publish&orderby=date&order=desc`,
+      { headers: { Authorization: authHeader }, signal: AbortSignal.timeout(10000) }
+    );
+    if (!res.ok) return [];
+
+    const posts = await res.json() as Array<{ slug: string; title: { rendered: string }; link: string }>;
+    return posts
+      .filter(p => p.slug !== currentSlug)
+      .slice(0, maxPosts)
+      .map(p => ({
+        title: p.title.rendered.replace(/<[^>]*>/g, ""),
+        url: p.link,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function buildRelatedPostsHtml(relatedPosts: Array<{ title: string; url: string }>): string {
+  if (relatedPosts.length === 0) return "";
+
+  const links = relatedPosts
+    .map(p => `<li><a href="${p.url}">${p.title}</a></li>`)
+    .join("\n");
+
+  return `\n<div class="related-posts" style="margin-top:2em;padding:1.2em;background:#f8f9fa;border-radius:8px;">
+<h3>관련 글 추천</h3>
+<ul>${links}</ul>
+</div>`;
 }
 
 async function publishViaRestApi(
@@ -534,7 +638,11 @@ async function publishToWordPress(
   }
 
   const replacedHtml = replacePlaceholders(sanitizedArticle.htmlContent, sanitizedArticle, uploadedMap);
-  const finalHtml = buildFinalHtml(sanitizedArticle, site, replacedHtml);
+
+  // 관련 글 내부 링크 추가 (Topical Authority 강화)
+  const relatedPosts = await fetchRelatedPosts(site, sanitizedArticle.slug, sanitizedArticle.category);
+  const relatedHtml = buildRelatedPostsHtml(relatedPosts);
+  const finalHtml = buildFinalHtml(sanitizedArticle, site, replacedHtml + relatedHtml);
 
   if (!remoteProbe.usable) {
     if (!localWordPressAvailable) {
@@ -566,6 +674,55 @@ async function publishToWordPress(
     });
 
     return publishLocallyWithWpCli(sanitizedArticle, site, finalHtml);
+  }
+}
+
+async function updateLlmsTxt(site: SiteCredential): Promise<void> {
+  const baseUrl = site.url.replace(/\/$/, "");
+  const authHeader = "Basic " + Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
+
+  try {
+    // 최근 글 50개 가져오기
+    const res = await fetch(
+      `${baseUrl}/wp-json/wp/v2/posts?per_page=50&_fields=title,link,excerpt&status=publish&orderby=date&order=desc`,
+      { headers: { Authorization: authHeader }, signal: AbortSignal.timeout(15000) }
+    );
+    if (!res.ok) return;
+
+    const posts = await res.json() as Array<{ title: { rendered: string }; link: string; excerpt: { rendered: string } }>;
+
+    const articleLines = posts
+      .map(p => {
+        const title = p.title.rendered.replace(/<[^>]*>/g, "");
+        const desc = p.excerpt.rendered.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
+        return `- [${title}](${p.link}): ${desc}`;
+      })
+      .join("\n");
+
+    const llmsContent = `# ${site.title}
+> ${site.persona?.name || site.admin_user}의 리뷰 사이트
+
+## About
+- Author: ${site.persona?.name || site.admin_user}
+- Site: ${baseUrl}
+- Content: Product reviews and buying guides in Korean
+- Total Articles: ${posts.length}
+
+## Articles
+${articleLines}
+
+## Navigation
+- [Homepage](${baseUrl}): Latest reviews and recommendations
+- [Sitemap](${baseUrl}/sitemap_index.xml): All published articles
+`;
+
+    const siteDir = `${WP_SITES_ROOT}/${site.slug}`;
+    if (existsSync(`${siteDir}/wp-config.php`)) {
+      writeFileSync(`${siteDir}/llms.txt`, llmsContent);
+      writeFileSync(`${siteDir}/llms-full.txt`, llmsContent);
+    }
+  } catch {
+    // best-effort
   }
 }
 
@@ -655,6 +812,18 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
             siteSlug: article.siteSlug,
             message: `${site.title} 발행 실패: ${error instanceof Error ? error.message : "알 수 없는 오류"}`,
           });
+        }
+      }
+
+      // 발행 완료 후 각 사이트의 llms.txt 갱신
+      const updatedSites = new Set<string>();
+      for (const a of articles) {
+        if (!updatedSites.has(a.siteSlug)) {
+          const site = siteMap.get(a.siteSlug);
+          if (site) {
+            await updateLlmsTxt(site);
+            updatedSites.add(a.siteSlug);
+          }
         }
       }
 
