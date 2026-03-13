@@ -2,6 +2,7 @@ import { exec, execSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import type { FastifyInstance } from "fastify";
 import { setupSSE } from "../utils/sse.js";
+import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
 
 const CREDS_PATH =
   process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
@@ -207,7 +208,9 @@ export async function deployRoutes(app: FastifyInstance) {
     // 기존 사이트 충돌 검사
     const existing = readExistingSites();
     const existingSlugs = new Set(
-      (existing as StoredCredential[]).map((s) => normalizeSlug(s.site_slug ?? s.slug)).filter(Boolean)
+      (existing as StoredCredential[])
+        .map((s) => normalizeSlug(s.site_slug ?? s.slug))
+        .filter((slug) => Boolean(slug) && !isExcludedSiteSlug(slug))
     );
     const conflicts: string[] = [];
     for (const c of configs) {

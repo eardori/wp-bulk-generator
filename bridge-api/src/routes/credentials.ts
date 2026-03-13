@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname } from "path";
 import type { FastifyInstance } from "fastify";
+import { isExcludedSiteRecord } from "../lib/excluded-sites.js";
 
 const CREDS_PATH =
   process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
@@ -93,14 +94,15 @@ export async function credentialsRoutes(app: FastifyInstance) {
         persona: config?.persona || null,
         categories: config?.categories || [],
       };
-    });
+    }).filter((cred) => !isExcludedSiteRecord(cred));
 
     return { sites: merged };
   });
 
   // 사이트 설정만 반환
   app.get("/credentials/config", async () => {
-    const configs = normalizeRecords(tryReadJson(CONFIG_PATH), "configs");
+    const configs = normalizeRecords(tryReadJson(CONFIG_PATH), "configs")
+      .filter((config) => !isExcludedSiteRecord(config));
     return { configs };
   });
 

@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "fs";
 import type { FastifyInstance } from "fastify";
+import { isExcludedSiteDomain, isExcludedSiteSlug } from "../lib/excluded-sites.js";
 
 const CREDS_PATH =
   process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
@@ -20,9 +21,10 @@ export async function reservedSlugsRoutes(app: FastifyInstance) {
           string
         >[];
         for (const item of data) {
-          if (item.slug || item.site_slug)
-            slugs.add((item.slug || item.site_slug) as string);
-          if (item.domain) domains.add(item.domain);
+          const slug = (item.slug || item.site_slug) as string | undefined;
+          const domain = item.domain as string | undefined;
+          if (slug && !isExcludedSiteSlug(slug)) slugs.add(slug);
+          if (domain && !isExcludedSiteDomain(domain)) domains.add(domain);
         }
       } catch {
         // 파일 없거나 파싱 실패
