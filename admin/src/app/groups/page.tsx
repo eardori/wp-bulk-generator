@@ -10,6 +10,26 @@ type SiteGroup = {
   createdAt: string;
 };
 
+function normalizeGroups(input: unknown): SiteGroup[] {
+  if (Array.isArray(input)) {
+    return input as SiteGroup[];
+  }
+
+  if (
+    input &&
+    typeof input === "object" &&
+    Array.isArray((input as { groups?: unknown[] }).groups)
+  ) {
+    return (input as { groups: SiteGroup[] }).groups;
+  }
+
+  return [];
+}
+
+function normalizeSites(input: unknown): SiteCredential[] {
+  return Array.isArray(input) ? (input as SiteCredential[]) : [];
+}
+
 export default function GroupsPage() {
   const [groups, setGroups] = useState<SiteGroup[]>([]);
   const [sites, setSites] = useState<SiteCredential[]>([]);
@@ -38,8 +58,8 @@ export default function GroupsPage() {
       fetch("/api/content/site-groups").then((r) => r.json()),
       fetch("/api/content/fetch-sites").then((r) => r.json()),
     ]).then(([groupData, siteData]) => {
-      setGroups(groupData.groups || []);
-      setSites(siteData.sites || []);
+      setGroups(normalizeGroups(groupData.groups ?? groupData));
+      setSites(normalizeSites(siteData.sites));
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);

@@ -8,6 +8,23 @@ const CONFIG_PATH =
   process.env.CONFIG_PATH || "/root/wp-sites-config.json";
 const GROUPS_PATH =
   process.env.GROUPS_PATH || "/root/site-groups.json";
+const CREDENTIAL_MIRROR_PATHS = [
+  "/root/wp-sites-credentials.json",
+  "/home/ubuntu/wp-bulk-generator/bridge-api/data/wp-sites-credentials.json",
+  "/home/ubuntu/wp-bulk-generator/admin/.cache/sites-credentials.json",
+  "/home/ubuntu/wp-bridge-api/data/wp-sites-credentials.json",
+];
+const CONFIG_MIRROR_PATHS = [
+  "/root/wp-sites-config.json",
+  "/home/ubuntu/wp-bulk-generator/bridge-api/data/wp-sites-config.json",
+  "/home/ubuntu/wp-bulk-generator/admin/.cache/sites-config.json",
+  "/home/ubuntu/wp-bridge-api/data/wp-sites-config.json",
+];
+const GROUP_MIRROR_PATHS = [
+  "/root/site-groups.json",
+  "/home/ubuntu/wp-bulk-generator/bridge-api/data/site-groups.json",
+  "/home/ubuntu/wp-bridge-api/data/site-groups.json",
+];
 
 function tryReadJson(path: string): unknown {
   try {
@@ -52,6 +69,10 @@ function writeJson(path: string, data: unknown[]) {
 
 function normalizeText(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function uniquePaths(primary: string, mirrors: string[]): string[] {
+  return Array.from(new Set([primary, ...mirrors].filter(Boolean)));
 }
 
 export async function credentialsRoutes(app: FastifyInstance) {
@@ -106,53 +127,81 @@ export async function credentialsRoutes(app: FastifyInstance) {
       return;
     }
 
-    const credentials = normalizeRecords(tryReadJson(CREDS_PATH), "sites");
-    const configs = normalizeRecords(tryReadJson(CONFIG_PATH), "configs");
-    const groups = normalizeRecords(tryReadJson(GROUPS_PATH), "groups");
-
     const shouldDelete = (item: Record<string, unknown>) => {
       const slug = normalizeText(item.slug ?? item.site_slug);
       const domain = normalizeText(item.domain);
       return slugSet.has(slug) || domainSet.has(domain);
     };
 
-    const nextCredentials = credentials.filter((item) => !shouldDelete(item));
-    const nextConfigs = configs.filter((item) => !shouldDelete(item));
+    let deletedCredentials = 0;
+    let deletedConfigs = 0;
+    let deletedGroups = 0;
+    let remainingCredentials = 0;
+    let remainingConfigs = 0;
+    let remainingGroups = 0;
 
-    const nextGroups = groups
-      .map((group) => {
-        const slugs = Array.isArray(group.slugs)
-          ? (group.slugs as unknown[]).map((slug) => normalizeText(slug))
-          : [];
+    for (const path of uniquePaths(CREDS_PATH, CREDENTIAL_MIRROR_PATHS)) {
+      const credentials = normalizeRecords(tryReadJson(path), "sites");
+      const nextCredentials = credentials.filter((item) => !shouldDelete(item));
+      remainingCredentials = Math.max(remainingCredentials, nextCredentials.length);
+      deletedCredentials = Math.max(
+        deletedCredentials,
+        credentials.length - nextCredentials.length
+      );
 
-        return {
-          ...group,
-          slugs: slugs.filter((slug) => !slugSet.has(slug)),
-        };
-      })
-      .filter((group) => Array.isArray(group.slugs) && group.slugs.length > 0);
-
-    if (nextCredentials.length !== credentials.length) {
-      writeJson(CREDS_PATH, nextCredentials);
+      if (nextCredentials.length !== credentials.length) {
+        writeJson(path, nextCredentials);
+      }
     }
-    if (nextConfigs.length !== configs.length) {
-      writeJson(CONFIG_PATH, nextConfigs);
+
+    for (const path of uniquePaths(CONFIG_PATH, CONFIG_MIRROR_PATHS)) {
+      const configs = normalizeRecords(tryReadJson(path), "configs");
+      const nextConfigs = configs.filter((item) => !shouldDelete(item));
+      remainingConfigs = Math.max(remainingConfigs, nextConfigs.length);
+      deletedConfigs = Math.max(
+        deletedConfigs,
+        configs.length - nextConfigs.length
+      );
+
+      if (nextConfigs.length !== configs.length) {
+        writeJson(path, nextConfigs);
+      }
     }
-    if (nextGroups.length !== groups.length) {
-      writeJson(GROUPS_PATH, nextGroups);
+
+    for (const path of uniquePaths(GROUPS_PATH, GROUP_MIRROR_PATHS)) {
+      const groups = normalizeRecords(tryReadJson(path), "groups");
+      const nextGroups = groups
+        .map((group) => {
+          const slugs = Array.isArray(group.slugs)
+            ? (group.slugs as unknown[]).map((slug) => normalizeText(slug))
+            : [];
+
+          return {
+            ...group,
+            slugs: slugs.filter((slug) => !slugSet.has(slug)),
+          };
+        })
+        .filter((group) => Array.isArray(group.slugs) && group.slugs.length > 0);
+
+      remainingGroups = Math.max(remainingGroups, nextGroups.length);
+      deletedGroups = Math.max(deletedGroups, groups.length - nextGroups.length);
+
+      if (nextGroups.length !== groups.length) {
+        writeJson(path, nextGroups);
+      }
     }
 
     return {
       success: true,
       deleted: {
-        credentials: credentials.length - nextCredentials.length,
-        configs: configs.length - nextConfigs.length,
-        groups: groups.length - nextGroups.length,
+        credentials: deletedCredentials,
+        configs: deletedConfigs,
+        groups: deletedGroups,
       },
       remaining: {
-        credentials: nextCredentials.length,
-        configs: nextConfigs.length,
-        groups: nextGroups.length,
+        credentials: remainingCredentials,
+        configs: remainingConfigs,
+        groups: remainingGroups,
       },
     };
   });

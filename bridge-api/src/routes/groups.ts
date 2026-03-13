@@ -12,10 +12,26 @@ type SiteGroup = {
   createdAt: string;
 };
 
+function normalizeGroups(input: unknown): SiteGroup[] {
+  if (Array.isArray(input)) {
+    return input as SiteGroup[];
+  }
+
+  if (
+    input &&
+    typeof input === "object" &&
+    Array.isArray((input as { groups?: unknown[] }).groups)
+  ) {
+    return (input as { groups: SiteGroup[] }).groups;
+  }
+
+  return [];
+}
+
 function readGroups(): SiteGroup[] {
   try {
     if (!existsSync(GROUPS_PATH)) return [];
-    return JSON.parse(readFileSync(GROUPS_PATH, "utf-8"));
+    return normalizeGroups(JSON.parse(readFileSync(GROUPS_PATH, "utf-8")));
   } catch {
     return [];
   }
