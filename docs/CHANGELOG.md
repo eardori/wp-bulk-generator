@@ -22,6 +22,11 @@
 - **진행 상태 분리**: `AI 생성 개수`, `배치 진행`, `목록 반영 개수`를 따로 보여 50개 생성 시 10개에서 멈춘 것처럼 보이던 문제 완화
 - **생성 중 안전 리셋**: `처음으로`를 눌렀을 때 이전 SSE 스트림을 abort하고 뒤늦은 상태 덮어쓰기를 무시하도록 보강
 
+## 2026-03-13: 대시보드 검은 화면 수정
+- **원인 확인**: dashboard SSE의 `groups` payload가 일부 환경에서 배열이 아니라 `{ groups: [] }` 형태로 들어와 `groups.forEach(...)`에서 client-side exception 발생
+- **브리지 정규화**: dashboard route가 `sites`, `groups`를 전송 전에 배열 형태로 정규화
+- **프론트 방어 처리**: dashboard page도 SSE payload를 배열로 정규화하고, `error` 이벤트 수신 시 로딩 상태를 안전하게 종료
+
 ## 2026-03-13: Lightsail Tokyo 인프라 마이그레이션 완료
 - **서버 이전**: EC2 Ireland (108.129.225.228) → Lightsail Tokyo (54.248.12.228)
   - 2 vCPU, 1.9GB RAM, 58GB Disk, Ubuntu 22.04

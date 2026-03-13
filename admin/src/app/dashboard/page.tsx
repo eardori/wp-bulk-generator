@@ -45,6 +45,26 @@ type SitePostData = {
 
 type PostMap = Record<string, SitePostData>;
 
+function normalizeGroups(input: unknown): SiteGroup[] {
+  if (Array.isArray(input)) {
+    return input as SiteGroup[];
+  }
+
+  if (
+    input &&
+    typeof input === "object" &&
+    Array.isArray((input as { groups?: unknown[] }).groups)
+  ) {
+    return (input as { groups: SiteGroup[] }).groups;
+  }
+
+  return [];
+}
+
+function normalizeSites(input: unknown): SiteCredential[] {
+  return Array.isArray(input) ? (input as SiteCredential[]) : [];
+}
+
 // ── helpers ──────────────────────────────────────────────────────────
 
 function decodeHtml(html: string): string {
@@ -270,8 +290,8 @@ export default function DashboardPage() {
     }).then(async ({ reader }) => {
       await readSSEStream(reader, (evt) => {
         if (evt.type === "meta") {
-          setSites((evt.sites as SiteCredential[]) || []);
-          setGroups((evt.groups as SiteGroup[]) || []);
+          setSites(normalizeSites(evt.sites));
+          setGroups(normalizeGroups(evt.groups));
           setLoading(false);
         } else if (evt.type === "posts") {
           setPostMap((prev) => ({
@@ -283,6 +303,9 @@ export default function DashboardPage() {
               error: evt.error as boolean | undefined,
             },
           }));
+        } else if (evt.type === "error") {
+          setLoading(false);
+          setLoadingPosts(false);
         } else if (evt.type === "done") {
           setDone(true);
           setLoadingPosts(false);

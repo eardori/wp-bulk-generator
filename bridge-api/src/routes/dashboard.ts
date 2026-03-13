@@ -26,6 +26,13 @@ type CacheEntry = {
   cachedAt: number;
 };
 
+type SiteGroup = {
+  id: string;
+  name: string;
+  slugs: string[];
+  createdAt: string;
+};
+
 // 인메모리 캐시 (TTL 5분)
 const CACHE_TTL = 5 * 60 * 1000;
 const postCache = new Map<string, CacheEntry>();
@@ -78,14 +85,34 @@ async function fetchSiteData(site: SiteCredential): Promise<CacheEntry> {
   return entry;
 }
 
+function normalizeGroups(input: unknown): SiteGroup[] {
+  if (Array.isArray(input)) {
+    return input as SiteGroup[];
+  }
+
+  if (
+    input &&
+    typeof input === "object" &&
+    Array.isArray((input as { groups?: unknown[] }).groups)
+  ) {
+    return (input as { groups: SiteGroup[] }).groups;
+  }
+
+  return [];
+}
+
+function normalizeSites(input: unknown): SiteCredential[] {
+  return Array.isArray(input) ? (input as SiteCredential[]) : [];
+}
+
 export async function dashboardRoutes(app: FastifyInstance) {
   app.get("/dashboard", async (_req, reply) => {
     const { send, close } = setupSSE(reply);
 
     try {
       const sitesRaw = await fetchCredentials();
-      const sites = sitesRaw as unknown as SiteCredential[];
-      const groups = await fetchGroups();
+      const sites = normalizeSites(sitesRaw);
+      const groups = normalizeGroups(await fetchGroups());
 
       send({ type: "meta", sites, groups });
 
