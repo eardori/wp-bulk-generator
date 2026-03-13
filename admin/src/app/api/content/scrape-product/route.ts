@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { execSync } from "child_process";
 import * as cheerio from "cheerio";
 import type { ScrapedProduct, ProductReview, ReviewApiParams } from "@/app/content/types";
-import { bridgeFetch } from "@/lib/bridge";
+import { bridgeFetch, parseBridgeJsonResponse } from "@/lib/bridge";
 
 const CURL_FETCH_TIMEOUT_MS = 10000;
 const PAGE_FETCH_TIMEOUT_MS = 12000;
@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
           method: "POST",
           body: JSON.stringify({ url }),
         });
-        return Response.json(await res.json(), { status: res.status });
+        return Response.json(await parseBridgeJsonResponse(res), { status: res.status });
       } catch (error) {
         return Response.json(
           {
@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
           method: "POST",
           body: JSON.stringify({ url }),
         });
-        return Response.json(await res.json(), { status: res.status });
+        return Response.json(await parseBridgeJsonResponse(res), { status: res.status });
       } catch (error) {
         return Response.json(
           {
