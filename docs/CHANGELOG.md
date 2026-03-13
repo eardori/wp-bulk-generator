@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-13: GEO(Generative Engine Optimization) 전면 적용
+- **Gemini 프롬프트 GEO 규칙 주입**: 제품/맛집 프롬프트에 Citability 규칙 G1~G9 추가 (인용 가능 단락, 정의 패턴, 통계 밀도, 질문형 소제목, 비교 테이블, 핵심 용어 볼드, 상투적 표현 금지, 답변 우선 구조)
+- **robots.txt 최적화**: Bytespider 제거, OAI-SearchBot/Amazonbot/FacebookBot/cohere-ai 추가
+- **Schema.org 강화**: Article 스키마에 author persona(jobTitle/knowsAbout/bio) + speakable 속성 추가
+- **MU-Plugin 스키마 3종 추가**: Organization(전 페이지), WebSite+SearchAction(프론트), BreadcrumbList(포스트)
+- **llms.txt 자동 생성**: 사이트 배포 시 llms.txt 생성 함수 + Nginx location 블록 추가
+- **기존 포스트 일괄 적용**: 175개 포스트에 GEO 스키마 재적용 완료
+
 ## 2026-03-13: 대시보드 405 에러 수정
 - **Dashboard API 405 수정**: `/api/dashboard/route.ts`에 POST 핸들러 추가 — `bridgeSSE`가 토큰 발급 시 항상 POST로 요청하지만 GET만 있어서 405 발생하던 문제 해결
 
