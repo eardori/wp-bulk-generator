@@ -14,6 +14,168 @@ const INVALID_TITLE_PATTERNS = [
   /^access denied$/i,
 ];
 
+const NAVER_PLACE_TARGET_REVIEW_COUNT = 50;
+const NAVER_PLACE_GRAPHQL_URL = "https://pcmap-api.place.naver.com/graphql";
+const NAVER_PLACE_REVIEW_QUERY = `query getVisitorReviews($input: VisitorReviewsInput) {
+  visitorReviews(input: $input) {
+    items {
+      id
+      cursor
+      reviewId
+      rating
+      author {
+        id
+        nickname
+        from
+        imageUrl
+        borderImageUrl
+        objectId
+        url
+        review {
+          totalCount
+          imageCount
+          avgRating
+          __typename
+        }
+        theme {
+          totalCount
+          __typename
+        }
+        isFollowing
+        followerCount
+        followRequested
+        __typename
+      }
+      body
+      thumbnail
+      media {
+        type
+        thumbnail
+        thumbnailRatio
+        class
+        videoId
+        videoUrl
+        trailerUrl
+        __typename
+      }
+      tags
+      status
+      visitCount
+      viewCount
+      visited
+      created
+      reply {
+        editUrl
+        body
+        editedBy
+        created
+        date
+        replyTitle
+        isReported
+        isSuspended
+        status
+        __typename
+      }
+      originType
+      item {
+        name
+        code
+        options
+        __typename
+      }
+      language
+      highlightRanges {
+        start
+        end
+        __typename
+      }
+      apolloCacheId
+      translatedText
+      businessName
+      showBookingItemName
+      bookingItemName
+      votedKeywords {
+        code
+        iconUrl
+        iconCode
+        name
+        __typename
+      }
+      userIdno
+      loginIdno
+      receiptInfoUrl
+      reactionStat {
+        id
+        typeCount {
+          name
+          count
+          __typename
+        }
+        totalCount
+        __typename
+      }
+      hasViewerReacted {
+        id
+        reacted
+        __typename
+      }
+      nickname
+      showPaymentInfo
+      visitCategories {
+        code
+        name
+        keywords {
+          code
+          name
+          __typename
+        }
+        __typename
+      }
+      representativeVisitDateTime
+      showRepresentativeVisitDateTime
+      __typename
+    }
+    starDistribution {
+      score
+      count
+      __typename
+    }
+    hideProductSelectBox
+    total
+    showRecommendationSort
+    itemReviewStats {
+      score
+      count
+      itemId
+      starDistribution {
+        score
+        count
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`;
+
+type NaverPlaceGraphqlReview = {
+  cursor?: string;
+  rating?: number | null;
+  body?: string | null;
+  created?: string | null;
+  businessName?: string | null;
+  author?: {
+    nickname?: string | null;
+  } | null;
+  media?: Array<{
+    thumbnail?: string | null;
+    videoUrl?: string | null;
+  }> | null;
+  votedKeywords?: Array<{
+    name?: string | null;
+  }> | null;
+};
+
 export async function POST(req: NextRequest) {
   try {
     let { url } = await req.json();
@@ -43,19 +205,29 @@ export async function POST(req: NextRequest) {
     // Naver Place / Map: delegate to bridge (Playwright required)
     if (url.includes("map.naver.com") || url.includes("pcmap.place.naver.com")) {
       try {
-        const res = await bridgeFetch("/scrape/naver-place", {
-          method: "POST",
-          body: JSON.stringify({ url }),
-        });
-        return Response.json(await parseBridgeJsonResponse(res), { status: res.status });
+        const product = await scrapeNaverPlaceDirect(url);
+        return Response.json({ product });
       } catch (error) {
-        return Response.json(
-          {
-            error: error instanceof Error ? error.message : "네이버 플레이스 스크랩 실패",
-            needManual: true,
-          },
-          { status: 200 }
-        );
+        try {
+          const res = await bridgeFetch("/scrape/naver-place", {
+            method: "POST",
+            body: JSON.stringify({ url }),
+          });
+          return Response.json(await parseBridgeJsonResponse(res), { status: res.status });
+        } catch (bridgeError) {
+          const directMessage =
+            error instanceof Error ? error.message : "네이버 플레이스 직접 스크랩 실패";
+          const bridgeMessage =
+            bridgeError instanceof Error ? bridgeError.message : "네이버 플레이스 브리지 스크랩 실패";
+
+          return Response.json(
+            {
+              error: `${directMessage} / ${bridgeMessage}`,
+              needManual: true,
+            },
+            { status: 200 }
+          );
+        }
       }
     }
 
@@ -142,6 +314,221 @@ export async function POST(req: NextRequest) {
 
 function isInvalidScrapeTitle(title: string): boolean {
   return INVALID_TITLE_PATTERNS.some((pattern) => pattern.test(title.trim()));
+}
+
+async function scrapeNaverPlaceDirect(url: string): Promise<ScrapedProduct> {
+  const placeId = extractNaverPlaceId(url);
+  if (!placeId) {
+    throw new Error("네이버 플레이스 ID를 찾을 수 없습니다.");
+  }
+
+  const reviews = await fetchNaverPlaceReviews(placeId, url);
+  if (reviews.length === 0) {
+    throw new Error("네이버 플레이스 리뷰를 찾을 수 없습니다.");
+  }
+
+  const title = reviews[0]?.businessName || `네이버 플레이스 ${placeId}`;
+  const images = extractUniqueReviewImages(reviews);
+  const keywordSummary = buildNaverPlaceKeywordSummary(reviews);
+
+  return {
+    url,
+    title,
+    description: keywordSummary ? `${title} 리뷰 키워드: ${keywordSummary}` : "",
+    price: "",
+    images,
+    specs: keywordSummary ? { reviewKeywords: keywordSummary } : {},
+    reviews: reviews.map((review) => ({
+      text: normalizeNaverPlaceBody(review.body),
+      rating: review.rating ?? 0,
+      reviewerName: review.author?.nickname?.trim() || "",
+      date: review.created?.trim() || "",
+      images: (review.media || [])
+        .map((media) => media.thumbnail?.trim() || media.videoUrl?.trim() || "")
+        .filter(Boolean)
+        .map((imgUrl) => ({
+          originalUrl: imgUrl,
+          thumbnailUrl: imgUrl,
+        })),
+    })),
+    rating: null,
+    reviewCount: reviews.length,
+    brand: "",
+    category: "naver-place",
+    source: "naver-place",
+  };
+}
+
+function extractNaverPlaceId(url: string): string | null {
+  const match = url.match(
+    /\/(?:place|restaurant|cafe|hospital|beauty|accommodation|entry\/place)\/(\d+)/
+  );
+  return match?.[1] || null;
+}
+
+async function fetchNaverPlaceReviews(
+  placeId: string,
+  sourceUrl: string
+): Promise<NaverPlaceGraphqlReview[]> {
+  const businessTypes = ["restaurant", "place", "cafe", "beauty", "hospital", "accommodation"];
+
+  for (const businessType of businessTypes) {
+    const reviews = await fetchNaverPlaceReviewsByType(placeId, businessType, sourceUrl).catch(
+      () => []
+    );
+    if (reviews.length > 0) {
+      return reviews;
+    }
+  }
+
+  return [];
+}
+
+async function fetchNaverPlaceReviewsByType(
+  placeId: string,
+  businessType: string,
+  sourceUrl: string
+): Promise<NaverPlaceGraphqlReview[]> {
+  const reviews: NaverPlaceGraphqlReview[] = [];
+  let after: string | undefined;
+
+  while (reviews.length < NAVER_PLACE_TARGET_REVIEW_COUNT) {
+    const input: Record<string, unknown> = {
+      businessId: placeId,
+      businessType,
+      item: "0",
+      bookingBusinessId: null,
+      size: 10,
+      isPhotoUsed: false,
+      includeContent: true,
+      getUserStats: true,
+      includeReceiptPhotos: true,
+      cidList: ["220036", "220037", "220075", "220764", "221440"],
+      getReactions: true,
+      getTrailer: true,
+    };
+
+    if (after) {
+      input.after = after;
+    }
+
+    const res = await fetch(NAVER_PLACE_GRAPHQL_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "*/*",
+        "Accept-Language": "ko",
+        Referer: sourceUrl,
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "X-WTM-GraphQL": Buffer.from(
+          JSON.stringify({ arg: placeId, type: businessType, source: "place" })
+        ).toString("base64"),
+        "X-Ncaptcha-Error": "error",
+      },
+      body: JSON.stringify([
+        {
+          operationName: "getVisitorReviews",
+          variables: { input },
+          query: NAVER_PLACE_REVIEW_QUERY,
+        },
+      ]),
+      signal: AbortSignal.timeout(PAGE_FETCH_TIMEOUT_MS),
+    });
+
+    if (!res.ok) {
+      throw new Error(`네이버 플레이스 리뷰 API HTTP ${res.status}`);
+    }
+
+    const payload = (await res.json()) as Array<{
+      data?: {
+        visitorReviews?: {
+          items?: NaverPlaceGraphqlReview[];
+        };
+      };
+      errors?: Array<{ message?: string }>;
+    }>;
+
+    const first = payload?.[0];
+    if (first?.errors?.length) {
+      throw new Error(first.errors[0]?.message || "네이버 플레이스 리뷰 API 오류");
+    }
+
+    const items = first?.data?.visitorReviews?.items || [];
+    if (items.length === 0) {
+      break;
+    }
+
+    reviews.push(...items);
+    after = items[items.length - 1]?.cursor;
+
+    if (!after) {
+      break;
+    }
+  }
+
+  return dedupeNaverPlaceReviews(reviews).slice(0, NAVER_PLACE_TARGET_REVIEW_COUNT);
+}
+
+function dedupeNaverPlaceReviews(
+  reviews: NaverPlaceGraphqlReview[]
+): NaverPlaceGraphqlReview[] {
+  const seen = new Set<string>();
+
+  return reviews.filter((review) => {
+    const key = [
+      review.author?.nickname?.trim() || "",
+      review.created?.trim() || "",
+      normalizeNaverPlaceBody(review.body),
+    ].join("|");
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function normalizeNaverPlaceBody(body?: string | null): string {
+  return (body || "").replace(/\s+/g, " ").trim();
+}
+
+function extractUniqueReviewImages(reviews: NaverPlaceGraphqlReview[]): string[] {
+  const images: string[] = [];
+
+  for (const review of reviews) {
+    for (const media of review.media || []) {
+      const candidate = media.thumbnail?.trim() || media.videoUrl?.trim() || "";
+      if (candidate && !images.includes(candidate)) {
+        images.push(candidate);
+      }
+      if (images.length >= 4) {
+        return images;
+      }
+    }
+  }
+
+  return images;
+}
+
+function buildNaverPlaceKeywordSummary(reviews: NaverPlaceGraphqlReview[]): string {
+  const counts = new Map<string, number>();
+
+  for (const review of reviews) {
+    for (const keyword of review.votedKeywords || []) {
+      const name = keyword.name?.trim();
+      if (!name) continue;
+      counts.set(name, (counts.get(name) || 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name, count]) => `${name} ${count}`)
+    .join(", ");
 }
 
 function fetchWithCurl(url: string): string {

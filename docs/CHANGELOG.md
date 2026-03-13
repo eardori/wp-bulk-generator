@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-03-13: Naver Place 스크랩을 Vercel 직접 처리로 전환
+- **Bridge 의존성 우회**: `/api/content/scrape-product`가 Naver Place URL에 대해 `pcmap-api.place.naver.com/graphql`를 직접 호출하도록 변경
+- **리뷰 50개 직접 수집**: 방문자 리뷰를 cursor 기반으로 10개씩 조회해 최대 50개를 바로 product payload에 포함
+- **백엔드 장애 내성 강화**: Bridge API가 죽어 있어도 Naver Place는 Vercel route 단독으로 스크랩 가능
+- **기본 장소 정보 보강**: 리뷰 응답의 `businessName`, 키워드, 리뷰 이미지를 활용해 제목/설명/대표 이미지 구성
+
 ## 2026-03-13: Naver Place 리뷰 50개 수집 보강
 - **리뷰 더보기 로직 수정**: 일반 `더보기` 대신 리뷰 하단 `펼쳐서 더보기`만 클릭하도록 변경해 Naver Place 리뷰 누락 문제 수정
 - **50개 수집 보장**: 방문자 리뷰를 10개씩 추가 로드하며 최대 50개까지 안정적으로 수집하도록 보강
