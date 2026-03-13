@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-03-13: Lightsail Tokyo 인프라 마이그레이션 완료
+- **서버 이전**: EC2 Ireland (108.129.225.228) → Lightsail Tokyo (54.248.12.228)
+  - 2 vCPU, 1.9GB RAM, 58GB Disk, Ubuntu 22.04
+- **서비스 통합**: Bridge API + EC2 Agent를 Lightsail에 통합 (Fly.io 제거)
+  - Bridge API (:4000) — `https://bridge.allmyreview.site` (Nginx reverse proxy + SSL)
+  - EC2 Agent (:4001) — localhost only
+- **WP 5개 사이트 재배포**: nutri-daily, vitacheck-kr, momvita, fitfuel-lab, healwell-note
+- **서버 튜닝**: PHP max_children=15, MariaDB buffer_pool=256M, Redis 64MB, Nginx 1024 connections
+- **CI/CD 업데이트**: deploy-bridge.yml (Bridge+Agent 동시 배포), deploy-fly.yml 비활성화
+- **GitHub Secrets + Vercel 환경변수**: 새 IP/도메인으로 업데이트 완료
+
 ## 2026-03-13: Naver Place 스크랩을 Vercel 직접 처리로 전환
 - **Bridge 의존성 우회**: `/api/content/scrape-product`가 Naver Place URL에 대해 `pcmap-api.place.naver.com/graphql`를 직접 호출하도록 변경
 - **리뷰 50개 직접 수집**: 방문자 리뷰를 cursor 기반으로 10개씩 조회해 최대 50개를 바로 product payload에 포함
