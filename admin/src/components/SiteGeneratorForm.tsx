@@ -1,8 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { bridgeSSE, readSSEStream } from "@/lib/bridge-sse";
-import type { SiteConfig, DeployStatus } from "@/app/page";
 
 const NICHE_PRESETS = [
   { label: "화장품/스킨케어", value: "화장품 리뷰" },
@@ -15,134 +13,96 @@ const NICHE_PRESETS = [
   { label: "요리/식품", value: "요리 레시피 식품 리뷰" },
 ];
 
-type Props = {
-  onGenerated: (configs: SiteConfig[]) => void;
-  onStatusChange: (status: DeployStatus["status"]) => void;
+export type DomainMode = "subdomain" | "individual";
+
+export type SiteGenerationRequest = {
+  niche: string;
+  count: number;
+  language_ratio: {
+    ko: number;
+    en: number;
+  };
+  domain_mode: DomainMode;
+  base_domain?: string;
+  domain_suffix?: string;
 };
 
-type DomainMode = "subdomain" | "individual";
+type Props = {
+  isGenerating: boolean;
+  externalError?: string;
+  onGenerate: (request: SiteGenerationRequest) => void;
+};
 
-export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props) {
+export default function SiteGeneratorForm({
+  isGenerating,
+  externalError = "",
+  onGenerate,
+}: Props) {
   const [niche, setNiche] = useState("");
   const [count, setCount] = useState(5);
   const [koRatio, setKoRatio] = useState(80);
   const [domainMode, setDomainMode] = useState<DomainMode>("subdomain");
   const [baseDomain, setBaseDomain] = useState("");
   const [domainSuffix, setDomainSuffix] = useState(".site");
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [error, setError] = useState("");
+  const [validationError, setValidationError] = useState("");
 
-  // Progress state
-  const [progressMsg, setProgressMsg] = useState("");
-  const [collected, setCollected] = useState(0);
-  const [totalBatches, setTotalBatches] = useState(0);
-  const [doneBatches, setDoneBatches] = useState(0);
-  const [partialWarning, setPartialWarning] = useState("");
-
-  const handleGenerate = async () => {
+  const handleGenerate = () => {
     if (!niche.trim()) {
-      setError("니치(주제)를 입력해주세요.");
+      setValidationError("니치(주제)를 입력해주세요.");
       return;
     }
+
     if (domainMode === "subdomain" && !baseDomain.trim()) {
-      setError("베이스 도메인을 입력해주세요. (예: myhealthblog.site)");
+      setValidationError("베이스 도메인을 입력해주세요. (예: myhealthblog.site)");
       return;
     }
 
-    setError("");
-    setPartialWarning("");
-    setProgressMsg("");
-    setCollected(0);
-    setDoneBatches(0);
-    setTotalBatches(0);
-    setIsGenerating(true);
-    onStatusChange("generating");
+    setValidationError("");
 
-    const accumulatedConfigs: SiteConfig[] = [];
-
-    try {
-      const { reader } = await bridgeSSE({
-        vercelEndpoint: "/api/generate-configs",
-        body: {
-          niche: niche.trim(),
-          count,
-          language_ratio: { ko: koRatio / 100, en: (100 - koRatio) / 100 },
-          domain_mode: domainMode,
-          base_domain:
-            domainMode === "subdomain"
-              ? baseDomain.trim().replace(/^https?:\/\//, "").replace(/\/$/, "")
-              : undefined,
-          domain_suffix: domainMode === "individual" ? domainSuffix : undefined,
-        },
-      });
-
-      await readSSEStream(reader, (event) => {
-        const type = event.type as string;
-
-        if (type === "start") {
-          setTotalBatches(event.totalBatches as number);
-        } else if (type === "progress") {
-          setProgressMsg(event.message as string);
-        } else if (type === "batch") {
-          const newConfigs = event.configs as SiteConfig[];
-          accumulatedConfigs.push(...newConfigs);
-          const c = event.collected as number;
-          const tb = event.totalBatches as number;
-          const bi = (event.batchIndex as number) + 1;
-          setCollected(c);
-          setDoneBatches(bi);
-          setTotalBatches(tb);
-          setProgressMsg(`✅ 배치 ${bi}/${tb} 완료 — ${c}개 누적`);
-          onGenerated([...accumulatedConfigs]);
-        } else if (type === "batch_error") {
-          const c = event.collected as number;
-          const tb = event.totalBatches as number;
-          const bi = (event.batchIndex as number) + 1;
-          setPartialWarning(
-            `⚠️ 배치 ${bi}/${tb}에서 중단됨 — ${c}개 저장됨. 아래 버튼으로 이어서 생성하세요.`
-          );
-          setProgressMsg("");
-        } else if (type === "done") {
-          const total = event.total as number;
-          setProgressMsg(`🎉 완료! 총 ${total}개 생성됨`);
-        } else if (type === "error") {
-          throw new Error(event.message as string);
-        }
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "알 수 없는 오류";
-      setError(msg);
-      if (accumulatedConfigs.length > 0) {
-        setPartialWarning(`⚠️ 오류 전까지 ${accumulatedConfigs.length}개는 저장됐습니다.`);
-      } else {
-        onStatusChange("idle");
-      }
-    } finally {
-      setIsGenerating(false);
-    }
+    onGenerate({
+      niche: niche.trim(),
+      count,
+      language_ratio: {
+        ko: koRatio / 100,
+        en: (100 - koRatio) / 100,
+      },
+      domain_mode: domainMode,
+      base_domain:
+        domainMode === "subdomain"
+          ? baseDomain.trim().replace(/^https?:\/\//, "").replace(/\/$/, "")
+          : undefined,
+      domain_suffix: domainMode === "individual" ? domainSuffix : undefined,
+    });
   };
 
-  const progressPercent =
-    totalBatches > 0 ? Math.round((doneBatches / totalBatches) * 100) : 0;
+  const error = validationError || externalError;
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 space-y-8">
-      {/* Niche Input */}
       <div className="space-y-3">
         <label className="block text-sm font-medium text-gray-300">니치 (주제)</label>
         <input
           type="text"
           value={niche}
-          onChange={(e) => setNiche(e.target.value)}
+          onChange={(e) => {
+            setNiche(e.target.value);
+            if (validationError) setValidationError("");
+          }}
           placeholder='예: "건강식품 영양제 리뷰"'
-          className="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all text-lg"
+          disabled={isGenerating}
+          className="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all text-lg disabled:opacity-60"
         />
         <div className="flex flex-wrap gap-2">
           {NICHE_PRESETS.map((preset) => (
             <button
               key={preset.value}
-              onClick={() => setNiche(preset.value)}
-              className={`px-3 py-1.5 text-xs rounded-full border transition-all ${
+              type="button"
+              disabled={isGenerating}
+              onClick={() => {
+                setNiche(preset.value);
+                if (validationError) setValidationError("");
+              }}
+              className={`px-3 py-1.5 text-xs rounded-full border transition-all disabled:opacity-60 ${
                 niche === preset.value
                   ? "border-emerald-500 bg-emerald-500/10 text-emerald-400"
                   : "border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300"
@@ -154,7 +114,6 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
         </div>
       </div>
 
-      {/* Count & Settings */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="space-y-3">
           <label className="block text-sm font-medium text-gray-300">수량</label>
@@ -164,8 +123,9 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
               min={1}
               max={50}
               value={count}
+              disabled={isGenerating}
               onChange={(e) => setCount(Number(e.target.value))}
-              className="flex-1 h-2 rounded-full appearance-none bg-gray-700 accent-emerald-500"
+              className="flex-1 h-2 rounded-full appearance-none bg-gray-700 accent-emerald-500 disabled:opacity-60"
             />
             <span className="text-2xl font-bold text-emerald-400 w-12 text-right">{count}</span>
           </div>
@@ -188,8 +148,9 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
               max={100}
               step={10}
               value={koRatio}
+              disabled={isGenerating}
               onChange={(e) => setKoRatio(Number(e.target.value))}
-              className="flex-1 h-2 rounded-full appearance-none bg-gray-700 accent-cyan-500"
+              className="flex-1 h-2 rounded-full appearance-none bg-gray-700 accent-cyan-500 disabled:opacity-60"
             />
             <span className="text-lg font-semibold text-cyan-400 w-16 text-right">{koRatio}%</span>
           </div>
@@ -199,13 +160,14 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
         </div>
       </div>
 
-      {/* Domain Mode Toggle */}
       <div className="space-y-4">
         <label className="block text-sm font-medium text-gray-300">도메인 방식</label>
         <div className="flex gap-3">
           <button
+            type="button"
+            disabled={isGenerating}
             onClick={() => setDomainMode("subdomain")}
-            className={`flex-1 py-3 rounded-xl border text-sm font-medium transition-all ${
+            className={`flex-1 py-3 rounded-xl border text-sm font-medium transition-all disabled:opacity-60 ${
               domainMode === "subdomain"
                 ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
                 : "border-gray-700 text-gray-400 hover:border-gray-600"
@@ -215,8 +177,10 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
             <div className="text-xs mt-0.5 opacity-70">도메인 1개로 N개 운영 (추천)</div>
           </button>
           <button
+            type="button"
+            disabled={isGenerating}
             onClick={() => setDomainMode("individual")}
-            className={`flex-1 py-3 rounded-xl border text-sm font-medium transition-all ${
+            className={`flex-1 py-3 rounded-xl border text-sm font-medium transition-all disabled:opacity-60 ${
               domainMode === "individual"
                 ? "border-cyan-500 bg-cyan-500/10 text-cyan-300"
                 : "border-gray-700 text-gray-400 hover:border-gray-600"
@@ -233,9 +197,13 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
               <input
                 type="text"
                 value={baseDomain}
-                onChange={(e) => setBaseDomain(e.target.value)}
+                disabled={isGenerating}
+                onChange={(e) => {
+                  setBaseDomain(e.target.value);
+                  if (validationError) setValidationError("");
+                }}
                 placeholder="구매한 도메인 입력 (예: myhealthblog.site)"
-                className="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
+                className="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all disabled:opacity-60"
               />
               {baseDomain && (
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-emerald-400 font-mono">
@@ -280,8 +248,9 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
           <div className="space-y-2">
             <select
               value={domainSuffix}
+              disabled={isGenerating}
               onChange={(e) => setDomainSuffix(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+              className="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 disabled:opacity-60"
             >
               <option value=".site">.site (저가 ~$2/년)</option>
               <option value=".xyz">.xyz (저가 ~$1/년)</option>
@@ -296,47 +265,14 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
         )}
       </div>
 
-      {/* Progress bar (while generating) */}
-      {isGenerating && (
-        <div className="space-y-3">
-          <div className="flex justify-between items-center text-sm">
-            <span className="text-gray-400">{progressMsg || "시작 중..."}</span>
-            <span className="text-emerald-400 font-bold">
-              {doneBatches}/{totalBatches || "?"} 배치 · {collected}/{count}개
-            </span>
-          </div>
-          <div className="w-full bg-gray-800 rounded-full h-2.5 overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-emerald-500 to-cyan-500 rounded-full transition-all duration-500"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-          <p className="text-xs text-gray-500 text-right">{progressPercent}%</p>
-        </div>
-      )}
-
-      {/* Partial warning (after error with some results saved) */}
-      {partialWarning && (
-        <div className="px-4 py-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20 text-yellow-300 text-sm space-y-2">
-          <p>{partialWarning}</p>
-          <button
-            onClick={handleGenerate}
-            className="text-xs underline text-yellow-400 hover:text-yellow-300"
-          >
-            이어서 더 생성하기
-          </button>
-        </div>
-      )}
-
-      {/* Error */}
       {error && (
         <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
           {error}
         </div>
       )}
 
-      {/* Generate Button */}
       <button
+        type="button"
         onClick={handleGenerate}
         disabled={isGenerating}
         className={`w-full py-4 rounded-xl font-semibold text-lg transition-all ${
@@ -351,7 +287,7 @@ export default function SiteGeneratorForm({ onGenerated, onStatusChange }: Props
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
             </svg>
-            배치 {doneBatches}/{totalBatches || "?"} 처리 중... ({collected}/{count}개)
+            생성 시작 중...
           </span>
         ) : (
           `AI 설정 생성 (${count}개)`

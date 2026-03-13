@@ -6,14 +6,30 @@ import type { SiteConfig } from "@/app/page";
 type Props = {
   configs: SiteConfig[];
   setConfigs: (configs: SiteConfig[]) => void;
+  disableEditing?: boolean;
+  emptyMessage?: string;
 };
 
-export default function SitePreviewTable({ configs, setConfigs }: Props) {
+export default function SitePreviewTable({
+  configs,
+  setConfigs,
+  disableEditing = false,
+  emptyMessage = "표시할 사이트가 없습니다.",
+}: Props) {
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
 
   const handleDelete = (index: number) => {
+    if (disableEditing) return;
     setConfigs(configs.filter((_, i) => i !== index));
   };
+
+  if (configs.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-gray-800 bg-gray-950/50 px-6 py-12 text-center text-sm text-gray-500">
+        {emptyMessage}
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-hidden rounded-xl border border-gray-800">
@@ -32,10 +48,10 @@ export default function SitePreviewTable({ configs, setConfigs }: Props) {
         </thead>
         <tbody className="divide-y divide-gray-800/50">
           {configs.map((site, i) => (
-            <tr key={i} className="group">
-              {/* Main Row */}
+            <tr key={`${site.site_slug}-${i}`} className="group animate-slide-in">
               <td className="px-4 py-3">
                 <button
+                  type="button"
                   onClick={() => setExpandedRow(expandedRow === i ? null : i)}
                   className="w-6 h-6 rounded-md bg-gray-800 text-gray-400 text-xs flex items-center justify-center hover:bg-gray-700 transition-colors"
                 >
@@ -44,12 +60,8 @@ export default function SitePreviewTable({ configs, setConfigs }: Props) {
               </td>
               <td className="px-4 py-3">
                 <div>
-                  <p className="text-white font-medium text-sm leading-tight">
-                    {site.site_title}
-                  </p>
-                  <p className="text-gray-500 text-xs mt-0.5">
-                    {site.domain}
-                  </p>
+                  <p className="text-white font-medium text-sm leading-tight">{site.site_title}</p>
+                  <p className="text-gray-500 text-xs mt-0.5">{site.domain}</p>
                 </div>
               </td>
               <td className="px-4 py-3">
@@ -57,9 +69,7 @@ export default function SitePreviewTable({ configs, setConfigs }: Props) {
                   <p className="text-gray-200 text-sm">
                     {site.persona.name} ({site.persona.age}세)
                   </p>
-                  <p className="text-gray-500 text-xs">
-                    {site.persona.concern}
-                  </p>
+                  <p className="text-gray-500 text-xs">{site.persona.concern}</p>
                 </div>
               </td>
               <td className="px-4 py-3">
@@ -92,27 +102,26 @@ export default function SitePreviewTable({ configs, setConfigs }: Props) {
                 </div>
               </td>
               <td className="px-4 py-3 text-center">
-                <span className="text-gray-400 text-sm">
-                  {site.categories.length}
-                </span>
+                <span className="text-gray-400 text-sm">{site.categories.length}</span>
               </td>
               <td className="px-4 py-3 text-center">
-                <button
-                  onClick={() => handleDelete(i)}
-                  className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all"
-                  title="삭제"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                {!disableEditing && (
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(i)}
+                    className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all"
+                    title="삭제"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
               </td>
 
-              {/* Expanded Details */}
               {expandedRow === i && (
                 <td colSpan={8} className="px-4 py-4 bg-gray-900/50">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-slide-in">
-                    {/* Left: Persona */}
                     <div className="space-y-3">
                       <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
                         페르소나
@@ -150,7 +159,6 @@ export default function SitePreviewTable({ configs, setConfigs }: Props) {
                       </div>
                     </div>
 
-                    {/* Right: Topics & Layout */}
                     <div className="space-y-3">
                       <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
                         초기 글 주제
