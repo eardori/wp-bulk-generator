@@ -5,6 +5,21 @@ const API_KEY = process.env.BRIDGE_API_KEY || "";
 const JWT_SECRET = process.env.BRIDGE_JWT_SECRET || "";
 
 const PUBLIC_PATHS = ["/health"];
+const JWT_ROUTE_PREFIXES: Record<string, string[]> = {
+  dashboard: ["/dashboard"],
+  deploy: ["/deploy"],
+  "generate-configs": ["/generate-configs"],
+  reviews: ["/reviews/"],
+  "generate-articles": ["/generate-articles"],
+  "seo-optimize": ["/seo-optimize"],
+  "publish-articles": ["/publish-articles"],
+};
+
+function isJwtRouteAllowed(pathname: string, route: string): boolean {
+  const prefixes = JWT_ROUTE_PREFIXES[route];
+  if (!prefixes) return false;
+  return prefixes.some((prefix) => pathname.startsWith(prefix));
+}
 
 export function verifyApiKey(
   req: FastifyRequest,
@@ -26,6 +41,17 @@ export function verifyApiKey(
   if (jwtToken) {
     try {
       const decoded = jwt.verify(jwtToken, JWT_SECRET);
+      const pathname = req.url.split("?")[0];
+      const route =
+        decoded && typeof decoded === "object" && "route" in decoded
+          ? (decoded.route as string)
+          : "";
+
+      if (!isJwtRouteAllowed(pathname, route)) {
+        reply.code(403).send({ error: "Token route mismatch" });
+        return;
+      }
+
       (req as unknown as Record<string, unknown>).bridgeUser = decoded;
       return done();
     } catch {
