@@ -10,6 +10,10 @@ type Props = {
 
 export default function DeployProgress({ status, onReset }: Props) {
   const logRef = useRef<HTMLDivElement>(null);
+  const credentials = status.credentials;
+  const credentialSites = Array.isArray(credentials?.sites) ? credentials.sites : [];
+  const adminUser = typeof credentials?.admin_user === "string" ? credentials.admin_user : "";
+  const adminPass = typeof credentials?.admin_pass === "string" ? credentials.admin_pass : "";
 
   useEffect(() => {
     if (logRef.current) {
@@ -69,7 +73,7 @@ export default function DeployProgress({ status, onReset }: Props) {
             </div>
 
             {/* Credentials */}
-            {status.credentials && (
+            {credentials && (
               <div className="bg-gray-800/50 rounded-xl p-6 space-y-4">
                 <h4 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
                   접속 정보
@@ -77,17 +81,17 @@ export default function DeployProgress({ status, onReset }: Props) {
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
                     <span className="text-gray-500">관리자 ID:</span>{" "}
-                    <code className="text-emerald-400">{status.credentials.admin_user}</code>
+                    <code className="text-emerald-400">{adminUser || "-"}</code>
                   </div>
                   <div>
                     <span className="text-gray-500">비밀번호:</span>{" "}
-                    <code className="text-emerald-400">{status.credentials.admin_pass}</code>
+                    <code className="text-emerald-400">{adminPass || "-"}</code>
                   </div>
                 </div>
 
                 <div className="space-y-2 mt-4">
                   <h5 className="text-xs text-gray-500 uppercase">사이트 목록</h5>
-                  {status.credentials.sites.map((site, i) => (
+                  {credentialSites.map((site, i) => (
                     <div
                       key={i}
                       className="flex items-center justify-between py-2 px-3 rounded-lg bg-gray-800 text-sm"
@@ -104,6 +108,9 @@ export default function DeployProgress({ status, onReset }: Props) {
                       </a>
                     </div>
                   ))}
+                  {credentialSites.length === 0 && (
+                    <div className="text-sm text-gray-500">표시할 사이트 정보가 없습니다.</div>
+                  )}
                 </div>
               </div>
             )}

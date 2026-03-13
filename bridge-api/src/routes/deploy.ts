@@ -13,6 +13,24 @@ type DeployConfig = {
   domain?: string;
 };
 
+type StoredCredential = {
+  slug?: string;
+  domain?: string;
+  url?: string;
+  admin_user?: string;
+  admin_pass?: string;
+};
+
+type DeployCredentialsSummary = {
+  admin_user: string;
+  admin_pass: string;
+  sites: Array<{
+    slug: string;
+    domain: string;
+    url: string;
+  }>;
+};
+
 function normalizeSlug(v: string | undefined) {
   return (v || "").trim().toLowerCase();
 }
@@ -42,6 +60,40 @@ function readExistingSites(): DeployConfig[] {
     const raw = execSync(`sudo cat ${CREDS_PATH}`, { timeout: 10000 }).toString();
     return JSON.parse(raw);
   } catch { return []; }
+}
+
+function summarizeDeployCredentials(
+  credentials: unknown[],
+  configs: DeployConfig[]
+): DeployCredentialsSummary | null {
+  const requestedSlugs = new Set(
+    configs.map((cfg) => normalizeSlug(cfg.site_slug)).filter(Boolean)
+  );
+  const requestedDomains = new Set(
+    configs.map((cfg) => normalizeDomain(cfg.domain)).filter(Boolean)
+  );
+
+  const matched = (credentials as StoredCredential[]).filter((site) => {
+    const slug = normalizeSlug(site.slug);
+    const domain = normalizeDomain(site.domain);
+    return requestedSlugs.has(slug) || requestedDomains.has(domain);
+  });
+
+  if (matched.length === 0) {
+    return null;
+  }
+
+  const first = matched[0];
+
+  return {
+    admin_user: first.admin_user || "admin",
+    admin_pass: first.admin_pass || "",
+    sites: matched.map((site) => ({
+      slug: site.slug || "",
+      domain: site.domain || "",
+      url: site.url || `http://${site.domain || ""}`,
+    })),
+  };
 }
 
 export async function deployRoutes(app: FastifyInstance) {
@@ -125,10 +177,26 @@ export async function deployRoutes(app: FastifyInstance) {
         writeFileSync(`${cacheDir}/sites-config.json`, JSON.stringify([...existing, ...configs], null, 2));
       } catch { /* ignore */ }
 
-      send({ type: "credentials", credentials });
-      send({ type: "done", message: "배포 완료" });
+      const credentialsSummary = summarizeDeployCredentials(credentials, configs);
+
+      if (credentialsSummary) {
+        send({ type: "credentials", credentials: credentialsSummary });
+      }
+
+      send({
+        type: "done",
+        status: "done",
+        progress: configs.length,
+        total: configs.length,
+        currentSite: "",
+        message: "배포 완료",
+      });
     } catch (err) {
-      send({ type: "error", message: err instanceof Error ? err.message : String(err) });
+      send({
+        type: "error",
+        status: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       close();
     }

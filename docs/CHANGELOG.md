@@ -10,6 +10,12 @@
 - **원인 확인**: admin은 `POST /deploy`로 SSE 연결하지만, Lightsail Bridge 서버(:4000)에 `deploy` 라우트가 등록되지 않아 `Route POST:/deploy not found` 발생
 - **Bridge 라우트 복구**: 외부 SSE 진입점인 Bridge API에도 `deployRoutes`를 다시 등록해 사이트 생성 후 배포 흐름 복구
 
+## 2026-03-13: 배포 완료 후 검은 화면 수정
+- **원인 확인**: deploy SSE가 `credentials` 배열 전체를 보내는데, 프론트는 `{ admin_user, admin_pass, sites }` 객체를 전제로 렌더링해 `status.credentials.sites.map(...)`에서 client-side exception 발생
+- **배포 응답 정규화**: Bridge deploy route가 요청한 사이트만 추려 `admin_user`, `admin_pass`, `sites[]` 형태로 요약해 전송
+- **완료/오류 상태 명시**: deploy SSE의 `done`, `error` 이벤트에 `status`를 같이 보내 완료 화면과 오류 화면 전환 보강
+- **프론트 방어 렌더링**: DeployProgress가 예기치 않은 `credentials` 형태를 받아도 검은 화면 없이 안전하게 렌더링
+
 ## 2026-03-13: Lightsail Tokyo 인프라 마이그레이션 완료
 - **서버 이전**: EC2 Ireland (108.129.225.228) → Lightsail Tokyo (54.248.12.228)
   - 2 vCPU, 1.9GB RAM, 58GB Disk, Ubuntu 22.04
