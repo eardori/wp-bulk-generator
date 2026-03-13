@@ -37,10 +37,18 @@ APP_CACHE_DIR="/home/ubuntu/wp-bulk-generator/admin/.cache"
 APP_CREDS_FILE="$APP_CACHE_DIR/sites-credentials.json"
 mkdir -p "$APP_CACHE_DIR"
 
+# EC2 Agent (Bridge API)가 읽는 경로
+BRIDGE_DATA_DIR="/home/ubuntu/wp-bulk-generator/bridge-api/data"
+BRIDGE_CREDS_FILE="$BRIDGE_DATA_DIR/wp-sites-credentials.json"
+mkdir -p "$BRIDGE_DATA_DIR"
+
 # 캐시 동기화 함수 (사이트 설치 후 호출)
 sync_cache() {
   cp "$CREDS_FILE" "$APP_CREDS_FILE" 2>/dev/null || true
   chown ubuntu:ubuntu "$APP_CREDS_FILE" 2>/dev/null || true
+  # EC2 Agent가 읽는 경로에도 동기화
+  cp "$CREDS_FILE" "$BRIDGE_CREDS_FILE" 2>/dev/null || true
+  chown ubuntu:ubuntu "$BRIDGE_CREDS_FILE" 2>/dev/null || true
 }
 
 wp_try() {

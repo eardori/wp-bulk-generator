@@ -37,7 +37,7 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             cd bridge-api
-            npm ci --production
+            npm ci
             npm run build
           ENDSSH
 
