@@ -5,6 +5,16 @@ import { getBrowser } from "../utils/browser.js";
 
 const NAVER_PLACE_NAV_TIMEOUT_MS = 18000;
 const NAVER_PLACE_SETTLE_MS = 1200;
+const NAVER_PLACE_TARGET_REVIEW_COUNT = 50;
+const NAVER_PLACE_REVIEW_LOAD_TIMEOUT_MS = 5000;
+const NAVER_PLACE_REVIEW_LOAD_MORE_MAX_CLICKS = 10;
+
+type NaverPlaceReviewItem = {
+  text: string;
+  images: string[];
+  reviewerName: string;
+  date: string;
+};
 
 /** Try restaurant URL first, then fallback to place URL */
 async function gotoNaverPlacePage(
@@ -51,6 +61,133 @@ async function pageHasAnyLocator(
     }
   }
   return false;
+}
+
+async function loadMoreNaverPlaceReviews(
+  page: Page,
+  targetReviews: number
+): Promise<void> {
+  let currentCount = await page.locator(".pui__vn15t2").count();
+  let clickCount = 0;
+
+  while (
+    currentCount < targetReviews &&
+    clickCount < NAVER_PLACE_REVIEW_LOAD_MORE_MAX_CLICKS
+  ) {
+    const loadMoreButton = page
+      .locator('a:has-text("펼쳐서 더보기"), button:has-text("펼쳐서 더보기")')
+      .first();
+
+    if (
+      (await loadMoreButton.count()) === 0 ||
+      !(await loadMoreButton.isVisible().catch(() => false))
+    ) {
+      break;
+    }
+
+    await loadMoreButton.scrollIntoViewIfNeeded().catch(() => {});
+
+    await loadMoreButton.click({ timeout: NAVER_PLACE_REVIEW_LOAD_TIMEOUT_MS }).catch(async () => {
+      await loadMoreButton.evaluate((el) => {
+        (el as HTMLElement).click();
+      });
+    });
+
+    try {
+      await page.waitForFunction(
+        (previousCount) =>
+          document.querySelectorAll(".pui__vn15t2").length > previousCount,
+        currentCount,
+        { timeout: NAVER_PLACE_REVIEW_LOAD_TIMEOUT_MS }
+      );
+    } catch {
+      await page.waitForTimeout(NAVER_PLACE_SETTLE_MS);
+    }
+
+    const nextCount = await page.locator(".pui__vn15t2").count();
+    if (nextCount <= currentCount) {
+      break;
+    }
+
+    currentCount = nextCount;
+    clickCount++;
+  }
+}
+
+async function expandNaverPlaceReviewTexts(page: Page): Promise<void> {
+  const expandButtons = page.locator(".place_apply_pui .pui__wFzIYl");
+  const expandCount = await expandButtons.count();
+
+  for (let i = 0; i < expandCount; i++) {
+    const button = expandButtons.nth(i);
+
+    if (!(await button.isVisible().catch(() => false))) {
+      continue;
+    }
+
+    await button.click({ timeout: 2000 }).catch(async () => {
+      await button.evaluate((el) => {
+        (el as HTMLElement).click();
+      });
+    });
+
+    await page.waitForTimeout(80);
+  }
+}
+
+async function collectNaverPlaceReviewItems(
+  page: Page
+): Promise<NaverPlaceReviewItem[]> {
+  return page.evaluate(() => {
+    const reviewItems: NaverPlaceReviewItem[] = [];
+    const reviewEls = document.querySelectorAll(".pui__vn15t2");
+
+    reviewEls.forEach((el) => {
+      const rawText = el.textContent?.replace(/\s+/g, " ").trim() ?? "";
+      const text = rawText.replace(/\s*접기$/, "").trim();
+
+      if (!text) return;
+
+      const container = el.closest(".place_apply_pui, .pui__X35jYm, li");
+
+      const imgs: string[] = [];
+      container?.querySelectorAll("img").forEach((img) => {
+        const src = (img as HTMLImageElement).src || "";
+        if (src.includes("pup-review-phinf") && !imgs.includes(src)) {
+          imgs.push(src);
+        }
+      });
+
+      const reviewerName =
+        container
+          ?.querySelector(".pui__NMi-Dp, .pui__J0Dkx, .pui__uslU0d")
+          ?.textContent?.trim() ?? "";
+
+      const date =
+        container
+          ?.querySelector(".pui__gfuUIT, .pui__QKE5B, time, [data-date]")
+          ?.textContent?.replace(/^방문일/, "")
+          .replace(/\s+/g, " ")
+          .trim() ?? "";
+
+      reviewItems.push({ text, images: imgs, reviewerName, date });
+    });
+
+    return reviewItems;
+  });
+}
+
+function normalizeNaverPlaceReviewDate(dateText: string): string {
+  const normalized = dateText.replace(/\s+/g, " ").trim();
+  const fullDateMatch = normalized.match(
+    /\d{4}년\s*\d{1,2}월\s*\d{1,2}일(?:\s*[가-힣]+)?/
+  );
+
+  if (fullDateMatch) {
+    return fullDateMatch[0].replace(/\s+/g, " ").trim();
+  }
+
+  return normalized.replace(/^방문일/, "").trim();
 }
 
 export async function scrapeRoutes(app: FastifyInstance) {
@@ -324,101 +461,38 @@ export async function scrapeRoutes(app: FastifyInstance) {
       const reviews: ProductReview[] = [];
 
       if (reviewNavigated) {
-        // Click "펼쳐서 더보기" buttons to load more reviews
-        const targetReviews = 50;
-        const maxClicks = 15;
-        let clickCount = 0;
+        await loadMoreNaverPlaceReviews(page, NAVER_PLACE_TARGET_REVIEW_COUNT);
+        await expandNaverPlaceReviewTexts(page);
 
-        while (clickCount < maxClicks) {
-          try {
-            const moreButton = page.locator(
-              'a:has-text("펼쳐서 더보기"), button:has-text("더보기")'
-            );
-            const buttonCount = await moreButton.count();
-            if (buttonCount === 0) break;
-
-            await moreButton.first().click();
-            await page.waitForTimeout(800);
-            clickCount++;
-
-            // Check if we have enough reviews
-            const reviewEls = await page.locator(".pui__vn15t2").count();
-            if (reviewEls >= targetReviews) break;
-          } catch {
-            break;
-          }
-        }
-
-        // Expand truncated reviews by clicking expand elements
-        try {
-          const expandButtons = page.locator(".pui__wFzIYl");
-          const expandCount = await expandButtons.count();
-          for (let i = 0; i < expandCount; i++) {
-            try {
-              await expandButtons.nth(i).click();
-              await page.waitForTimeout(100);
-            } catch {
-              // skip individual expand failures
-            }
-          }
-        } catch {
-          // expand step failed
-        }
-
-        // Collect reviews
-        const reviewData = await page.evaluate(() => {
-          const reviewItems: Array<{
-            text: string;
-            images: string[];
-            reviewerName: string;
-            date: string;
-          }> = [];
-
-          const reviewEls = document.querySelectorAll(".pui__vn15t2");
-          reviewEls.forEach((el) => {
-            const text = el.textContent?.trim() ?? "";
-            if (!text) return;
-
-            // Find parent review container
-            const container = el.closest(".pui__X35jYm, .place_section_content > div");
-
-            const imgs: string[] = [];
-            container
-              ?.querySelectorAll("img")
-              .forEach((img) => {
-                const src = img.src || "";
-                if (src.includes("pup-review-phinf") && !imgs.includes(src)) {
-                  imgs.push(src);
-                }
-              });
-
-            const nameEl = container?.querySelector(
-              ".pui__NMi-Dp, .pui__J0Dkx"
-            );
-            const reviewerName = nameEl?.textContent?.trim() ?? "";
-
-            const dateEl = container?.querySelector(
-              ".pui__gfuUIT, .pui__QKE5B, time"
-            );
-            const date = dateEl?.textContent?.trim() ?? "";
-
-            reviewItems.push({ text, images: imgs, reviewerName, date });
-          });
-
-          return reviewItems;
-        });
+        const reviewData = await collectNaverPlaceReviewItems(page);
+        const seenReviews = new Set<string>();
 
         for (const item of reviewData) {
+          const reviewKey = [
+            item.reviewerName.trim(),
+            item.date.trim(),
+            item.text.trim(),
+          ].join("|");
+
+          if (seenReviews.has(reviewKey)) {
+            continue;
+          }
+
+          seenReviews.add(reviewKey);
           reviews.push({
-            text: item.text,
+            text: item.text.trim(),
             rating: 0,
             images: item.images.map((imgUrl) => ({
               originalUrl: imgUrl,
               thumbnailUrl: imgUrl,
             })),
-            reviewerName: item.reviewerName,
-            date: item.date,
+            reviewerName: item.reviewerName.trim(),
+            date: normalizeNaverPlaceReviewDate(item.date),
           });
+
+          if (reviews.length >= NAVER_PLACE_TARGET_REVIEW_COUNT) {
+            break;
+          }
         }
       }
 
