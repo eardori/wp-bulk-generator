@@ -1,10 +1,20 @@
+import { existsSync, readFileSync } from "fs";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { FastifyInstance } from "fastify";
 import { setupSSE } from "../utils/sse.js";
 import { fetchReservedSlugs } from "../lib/ec2-client.js";
+import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
 
 const BATCH_SIZE = 10;
 const MAX_SLUG_LENGTH = 15;
+const LOCAL_RESERVED_PATHS = [
+  process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json",
+  process.env.CONFIG_PATH || "/root/wp-sites-config.json",
+  "/home/ubuntu/wp-bulk-generator/bridge-api/data/wp-sites-credentials.json",
+  "/home/ubuntu/wp-bulk-generator/bridge-api/data/wp-sites-config.json",
+  "/home/ubuntu/wp-bridge-api/data/wp-sites-credentials.json",
+  "/home/ubuntu/wp-bridge-api/data/wp-sites-config.json",
+];
 
 function sanitizeSlug(value: string): string {
   const cleaned = value
@@ -24,8 +34,31 @@ async function loadReservedSlugs(): Promise<Set<string>> {
       reserved.add(sanitizeSlug(slug));
     }
   } catch {
-    // EC2 Agent 연결 실패 시 빈 set으로 진행
+    // Fall through to local file fallback below.
   }
+
+  if (reserved.size > 0) {
+    return reserved;
+  }
+
+  for (const path of LOCAL_RESERVED_PATHS) {
+    try {
+      if (!existsSync(path)) continue;
+      const raw = JSON.parse(readFileSync(path, "utf-8")) as Array<Record<string, unknown>>;
+      for (const item of raw) {
+        const slug = typeof item.site_slug === "string"
+          ? item.site_slug
+          : typeof item.slug === "string"
+          ? item.slug
+          : "";
+        if (!slug || isExcludedSiteSlug(slug)) continue;
+        reserved.add(sanitizeSlug(slug));
+      }
+    } catch {
+      // ignore malformed fallback files
+    }
+  }
+
   return reserved;
 }
 

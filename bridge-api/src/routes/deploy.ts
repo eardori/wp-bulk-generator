@@ -213,28 +213,63 @@ export async function deployRoutes(app: FastifyInstance) {
         .filter((slug) => Boolean(slug) && !isExcludedSiteSlug(slug))
     );
     const conflicts: string[] = [];
+    const conflictReasons = new Map<string, string>();
+    const deployableConfigs: DeployConfig[] = [];
     for (const c of configs) {
       const s = normalizeSlug(c.site_slug);
-      if (s && existingSlugs.has(s)) conflicts.push(s);
-    }
-    if (conflicts.length > 0) {
-      reply.code(409).send({ error: `이미 존재하는 사이트: ${conflicts.join(", ")}` });
-      return;
+      if (s && existingSlugs.has(s)) {
+        conflicts.push(s);
+        conflictReasons.set(s, "이미 존재하는 사이트");
+        continue;
+      }
+      deployableConfigs.push(c);
     }
 
     const { send, close } = setupSSE(reply);
 
     try {
-      // 임시 설정 파일 작성
-      const tmpConfig = `/tmp/sites-config-deploy-${Date.now()}.json`;
-      writeFileSync(tmpConfig, JSON.stringify(configs, null, 2));
-
-      send({ type: "progress", message: "배포 스크립트 실행 시작..." });
-
       let completed = 0;
       let successCount = 0;
       let failureCount = 0;
-      const failedSites: DeployFailure[] = [];
+      const failedSites: DeployFailure[] = conflicts.map((slug) => ({
+        slug,
+        reason: conflictReasons.get(slug) || "이미 존재하는 사이트",
+      }));
+
+      if (conflicts.length > 0) {
+        failureCount += conflicts.length;
+        for (const slug of conflicts) {
+          completed += 1;
+          send({
+            type: "progress",
+            progress: completed,
+            total: configs.length,
+            currentSite: slug,
+            message: `${slug} 건너뜀: 이미 존재하는 사이트 (${completed}/${configs.length})`,
+          });
+        }
+      }
+
+      if (deployableConfigs.length === 0) {
+        send({
+          type: "done",
+          status: "done",
+          progress: configs.length,
+          total: configs.length,
+          currentSite: "",
+          successCount,
+          failureCount,
+          failedSites,
+          message: `배포 완료 (${successCount}개 성공, ${failureCount}개 실패)`,
+        });
+        return;
+      }
+
+      // 임시 설정 파일 작성
+      const tmpConfig = `/tmp/sites-config-deploy-${Date.now()}.json`;
+      writeFileSync(tmpConfig, JSON.stringify(deployableConfigs, null, 2));
+
+      send({ type: "progress", message: "배포 스크립트 실행 시작..." });
 
       // 배포 스크립트 실행 (stdout/stderr 실시간 스트리밍)
       const child = exec(`sudo bash ${DEPLOY_SCRIPT} ${tmpConfig}`, {
@@ -251,9 +286,9 @@ export async function deployRoutes(app: FastifyInstance) {
               send({
                 type: "progress",
                 progress: completed,
-                total: marker.total || configs.length,
+                total: configs.length,
                 currentSite: marker.title || marker.slug,
-                message: `[${marker.index}/${marker.total || configs.length}] ${marker.title || marker.slug} 설치 중...`,
+                message: `[${completed + marker.index}/${configs.length}] ${marker.title || marker.slug} 설치 중...`,
               });
               continue;
             }
@@ -294,8 +329,8 @@ export async function deployRoutes(app: FastifyInstance) {
             }
 
             if (marker.type === "summary") {
-              successCount = marker.successCount;
-              failureCount = marker.failureCount;
+              successCount = Math.max(successCount, marker.successCount);
+              failureCount = Math.max(failureCount, conflicts.length + marker.failureCount);
               continue;
             }
           }
@@ -331,10 +366,10 @@ export async function deployRoutes(app: FastifyInstance) {
       if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
       try {
         writeFileSync(`${cacheDir}/sites-credentials.json`, JSON.stringify(credentials, null, 2));
-        writeFileSync(`${cacheDir}/sites-config.json`, JSON.stringify([...existing, ...configs], null, 2));
+        writeFileSync(`${cacheDir}/sites-config.json`, JSON.stringify([...existing, ...deployableConfigs], null, 2));
       } catch { /* ignore */ }
 
-      const credentialsSummary = summarizeDeployCredentials(credentials, configs);
+      const credentialsSummary = summarizeDeployCredentials(credentials, deployableConfigs);
 
       if (credentialsSummary) {
         send({ type: "credentials", credentials: credentialsSummary });
