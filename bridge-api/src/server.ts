@@ -14,15 +14,51 @@ import { dashboardRoutes } from "./routes/dashboard.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || "0.0.0.0";
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://wp.multiful.ai",
+  "https://wp-bulk-generator.vercel.app",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+];
+
+function getAllowedOrigins(): Set<string> {
+  const configured = (process.env.CORS_ORIGIN || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  return new Set([...DEFAULT_ALLOWED_ORIGINS, ...configured]);
+}
+
+function isAllowedOrigin(origin: string, allowedOrigins: Set<string>): boolean {
+  if (allowedOrigins.has(origin)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(origin);
+    return url.protocol === "https:" && url.hostname.endsWith(".vercel.app");
+  } catch {
+    return false;
+  }
+}
 
 const app = Fastify({
   logger: true,
   bodyLimit: 10 * 1024 * 1024, // 10MB
 });
+const allowedOrigins = getAllowedOrigins();
 
 // CORS
 await app.register(cors, {
-  origin: process.env.CORS_ORIGIN || "*",
+  origin(origin, callback) {
+    if (!origin || isAllowedOrigin(origin, allowedOrigins)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(null, false);
+  },
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: [
     "Content-Type",
@@ -60,6 +96,7 @@ process.on("SIGINT", shutdown);
 
 try {
   await app.listen({ port: PORT, host: HOST });
+  app.log.info({ allowedOrigins: [...allowedOrigins] }, "Bridge CORS origins loaded");
   app.log.info(`Bridge API running on http://${HOST}:${PORT}`);
 } catch (err) {
   app.log.error(err);

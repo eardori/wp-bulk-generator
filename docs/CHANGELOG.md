@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-03-13: 사이트 생성 Load failed 수정
+- **원인 확인**: `wp.multiful.ai`에서 `bridge.allmyreview.site`로 직접 SSE 연결 시 CORS 허용 origin이 예전 Vercel 도메인만 가리켜 브라우저에서 `Load failed` 발생
+- **Bridge CORS 보강**: `wp.multiful.ai`, `wp-bulk-generator.vercel.app`, 로컬 개발 origin과 `*.vercel.app` preview를 허용하도록 수정
+- **환경 예제 정리**: `admin/.env.example`, `bridge-api/.env.example`를 Lightsail + 멀티 origin 기준으로 업데이트
+
 ## 2026-03-13: Lightsail Tokyo 인프라 마이그레이션 완료
 - **서버 이전**: EC2 Ireland (108.129.225.228) → Lightsail Tokyo (54.248.12.228)
   - 2 vCPU, 1.9GB RAM, 58GB Disk, Ubuntu 22.04
