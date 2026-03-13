@@ -29,14 +29,14 @@ type SiteCredential = {
   admin_user: string;
   admin_pass: string;
   app_pass: string;
-  persona: {
+  persona?: {
     name: string;
     age: number;
     concern: string;
     expertise: string;
     tone: string;
     bio: string;
-  };
+  } | null;
 };
 
 type GeneratedArticle = {
@@ -80,6 +80,16 @@ type ProductAngleConfig = {
 };
 
 type ReviewImageIndex = [number, number];
+type SitePersona = NonNullable<SiteCredential["persona"]>;
+
+const DEFAULT_PERSONA: SitePersona = {
+  name: "운영팀",
+  age: 35,
+  concern: "실사용 후기",
+  expertise: "제품 분석",
+  tone: "신뢰감 있는",
+  bio: "실구매 리뷰와 공개 정보를 바탕으로 핵심만 정리해 전달합니다.",
+};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -246,6 +256,41 @@ function buildReviewImagesFromIndices(reviews: ProductReview[], usedReviewImageI
   return usedReviewImageIndices
     .map(([reviewIdx, imageIdx]) => reviews[reviewIdx]?.images?.[imageIdx])
     .filter(Boolean) as ReviewImage[];
+}
+
+function normalizePersona(site: Pick<SiteCredential, "slug" | "title" | "persona">): SitePersona {
+  const raw = (site.persona ?? {}) as Partial<SitePersona>;
+  const fallbackName =
+    (typeof site.title === "string" && site.title.trim()) ||
+    (typeof site.slug === "string" && site.slug.trim()) ||
+    DEFAULT_PERSONA.name;
+
+  return {
+    name:
+      typeof raw.name === "string" && raw.name.trim()
+        ? raw.name.trim()
+        : fallbackName,
+    age:
+      typeof raw.age === "number" && Number.isFinite(raw.age) && raw.age > 0
+        ? raw.age
+        : DEFAULT_PERSONA.age,
+    concern:
+      typeof raw.concern === "string" && raw.concern.trim()
+        ? raw.concern.trim()
+        : DEFAULT_PERSONA.concern,
+    expertise:
+      typeof raw.expertise === "string" && raw.expertise.trim()
+        ? raw.expertise.trim()
+        : DEFAULT_PERSONA.expertise,
+    tone:
+      typeof raw.tone === "string" && raw.tone.trim()
+        ? raw.tone.trim()
+        : DEFAULT_PERSONA.tone,
+    bio:
+      typeof raw.bio === "string" && raw.bio.trim()
+        ? raw.bio.trim()
+        : `${fallbackName} 관점에서 실사용 후기와 공개 정보를 정리합니다.`,
+  };
 }
 
 function injectReviewImagePlaceholders(html: string, usedReviewImageIndices: ReviewImageIndex[]) {
@@ -492,7 +537,7 @@ async function generateForSite(
   reviewCollection?: ReviewCollection,
   articleVariation = 0,
 ): Promise<GeneratedArticle> {
-  const persona = site.persona;
+  const persona = normalizePersona(site);
   const sourceTitle = product.title?.trim() || site.title || site.slug;
 
   const primaryLine = `"${primaryQuestion.question}" (의도: ${primaryQuestion.intent})`;
@@ -1116,7 +1161,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
               type: "progress",
               current: globalNum,
               total,
-              message: `[${globalNum}/${total}] ${site.persona.name} — "${primaryQuestion.question}" 생성 중...`,
+              message: `[${globalNum}/${total}] ${normalizePersona(site).name} — "${primaryQuestion.question}" 생성 중...`,
             });
 
             // 최대 5회 재시도 — 429는 지수 백오프

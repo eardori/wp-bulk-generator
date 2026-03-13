@@ -68,14 +68,14 @@ export type SiteCredential = {
   admin_user: string;
   admin_pass: string;
   app_pass: string;
-  persona: {
+  persona?: {
     name: string;
     age: number;
     concern: string;
     expertise: string;
     tone: string;
     bio: string;
-  };
+  } | null;
 };
 
 export type GeneratedArticle = {

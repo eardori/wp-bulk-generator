@@ -245,6 +245,15 @@ export default function ContentPage() {
         });
       }
 
+      if (collectedArticles.length === 0) {
+        setLog((prev) => [
+          ...prev,
+          "생성된 글이 없습니다. 사이트 설정 또는 페르소나 데이터를 확인한 뒤 다시 시도해주세요.",
+        ]);
+        setStep("error");
+        return;
+      }
+
       setArticles(collectedArticles);
       setStep("preview");
 
@@ -275,6 +284,16 @@ export default function ContentPage() {
       .filter((sc) => sc.site);
 
     const totalArticles = siteConfigs.reduce((sum, sc) => sum + sc.count, 0);
+
+    if (siteConfigs.length === 0 || totalArticles === 0) {
+      setLog((prev) => [
+        ...prev,
+        "생성할 사이트를 찾지 못했습니다. 사이트 목록을 다시 불러온 뒤 재시도해주세요.",
+      ]);
+      setStep("error");
+      return;
+    }
+
     setSelectedSites(siteConfigs.map((sc) => sc.site));
     setSavedSiteConfigs(siteConfigs);
     setSavedTotalArticles(totalArticles);
@@ -518,6 +537,29 @@ export default function ContentPage() {
       )}
 
       {/* Step 6: Preview */}
+      {step === "preview" && articles.length === 0 && (
+        <div className="bg-gray-900 border border-yellow-500/30 rounded-2xl p-8 text-center space-y-4 animate-slide-in">
+          <p className="text-yellow-300 text-lg font-semibold">생성된 글이 없습니다</p>
+          <p className="text-gray-400 text-sm">
+            {log[log.length - 1] || "생성 중 오류가 발생했습니다. 사이트 설정을 다시 확인해주세요."}
+          </p>
+          <div className="flex justify-center gap-3">
+            <button
+              onClick={() => setStep("content-config")}
+              className="px-6 py-2 rounded-xl border border-gray-700 text-gray-300 hover:bg-gray-800 transition-colors"
+            >
+              설정으로 돌아가기
+            </button>
+            <button
+              onClick={handleReset}
+              className="px-6 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-semibold hover:from-emerald-600 hover:to-cyan-600 transition-all"
+            >
+              처음으로
+            </button>
+          </div>
+        </div>
+      )}
+
       {step === "preview" && articles.length > 0 && (
         <div className="space-y-4">
           {/* 이어서 생성 배너 */}
