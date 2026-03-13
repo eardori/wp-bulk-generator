@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export function middleware(req: NextRequest) {
+  const adminUser = process.env.ADMIN_USER;
+  const adminPass = process.env.ADMIN_PASS;
+
+  // 환경변수 미설정 시 인증 스킵 (로컬 개발용)
+  if (!adminUser || !adminPass) {
+    return NextResponse.next();
+  }
+
   const auth = req.headers.get("authorization");
 
   if (auth) {
@@ -8,10 +16,7 @@ export function middleware(req: NextRequest) {
     if (scheme === "Basic" && encoded) {
       const decoded = atob(encoded);
       const [user, pass] = decoded.split(":");
-      if (
-        user === process.env.ADMIN_USER &&
-        pass === process.env.ADMIN_PASS
-      ) {
+      if (user === adminUser && pass === adminPass) {
         return NextResponse.next();
       }
     }
