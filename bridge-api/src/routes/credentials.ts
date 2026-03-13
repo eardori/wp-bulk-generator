@@ -9,13 +9,36 @@ const CONFIG_PATH =
 const GROUPS_PATH =
   process.env.GROUPS_PATH || "/root/site-groups.json";
 
-function tryReadJson(path: string): unknown[] {
+function tryReadJson(path: string): unknown {
   try {
     if (!existsSync(path)) return [];
     return JSON.parse(readFileSync(path, "utf-8"));
   } catch {
     return [];
   }
+}
+
+function normalizeRecords(
+  input: unknown,
+  nestedKey?: string
+): Record<string, unknown>[] {
+  if (Array.isArray(input)) {
+    return input as Record<string, unknown>[];
+  }
+
+  if (
+    nestedKey &&
+    input &&
+    typeof input === "object" &&
+    Array.isArray((input as Record<string, unknown>)[nestedKey])
+  ) {
+    return (input as Record<string, unknown>)[nestedKey] as Record<
+      string,
+      unknown
+    >[];
+  }
+
+  return [];
 }
 
 function writeJson(path: string, data: unknown[]) {
@@ -34,8 +57,8 @@ function normalizeText(value: unknown): string {
 export async function credentialsRoutes(app: FastifyInstance) {
   // 사이트 자격증명 + 페르소나 병합
   app.get("/credentials", async () => {
-    const credentials = tryReadJson(CREDS_PATH) as Record<string, unknown>[];
-    const configs = tryReadJson(CONFIG_PATH) as Record<string, unknown>[];
+    const credentials = normalizeRecords(tryReadJson(CREDS_PATH), "sites");
+    const configs = normalizeRecords(tryReadJson(CONFIG_PATH), "configs");
 
     const configMap = new Map<string, Record<string, unknown>>();
     for (const c of configs) {
@@ -56,7 +79,7 @@ export async function credentialsRoutes(app: FastifyInstance) {
 
   // 사이트 설정만 반환
   app.get("/credentials/config", async () => {
-    const configs = tryReadJson(CONFIG_PATH);
+    const configs = normalizeRecords(tryReadJson(CONFIG_PATH), "configs");
     return { configs };
   });
 
@@ -83,9 +106,9 @@ export async function credentialsRoutes(app: FastifyInstance) {
       return;
     }
 
-    const credentials = tryReadJson(CREDS_PATH) as Record<string, unknown>[];
-    const configs = tryReadJson(CONFIG_PATH) as Record<string, unknown>[];
-    const groups = tryReadJson(GROUPS_PATH) as Record<string, unknown>[];
+    const credentials = normalizeRecords(tryReadJson(CREDS_PATH), "sites");
+    const configs = normalizeRecords(tryReadJson(CONFIG_PATH), "configs");
+    const groups = normalizeRecords(tryReadJson(GROUPS_PATH), "groups");
 
     const shouldDelete = (item: Record<string, unknown>) => {
       const slug = normalizeText(item.slug ?? item.site_slug);
