@@ -31,6 +31,7 @@ ALLMYREVIEW_CERT_MAX_NAMES=95
 WP_CRON_RUNNER_PATH="/usr/local/bin/wp-bulk-run-cron.sh"
 WP_CRON_SCHEDULE_PATH="/etc/cron.d/wp-bulk-run-cron"
 WP_CLI_TIMEOUT="${WP_CLI_TIMEOUT:-30}"
+POST_DEPLOY_REPAIR_SCRIPT="${POST_DEPLOY_REPAIR_SCRIPT:-/home/ubuntu/wp-bulk-generator/scripts/backfill-existing-sites.sh}"
 
 # ubuntu 유저(Next.js)가 읽을 수 있는 캐시 경로
 APP_CACHE_DIR="/home/ubuntu/wp-bulk-generator/admin/.cache"
@@ -53,6 +54,24 @@ sync_cache() {
 
 wp_try() {
   timeout "$WP_CLI_TIMEOUT" wp "$@"
+}
+
+validate_local_wordpress_runtime() {
+  local site_dir="$1"
+  local expected_url="$2"
+
+  wp_try core is-installed --path="$site_dir" --allow-root >/dev/null 2>&1 || return 1
+  wp_try option get home --path="$site_dir" --allow-root >/dev/null 2>&1 || return 1
+  wp_try option get siteurl --path="$site_dir" --allow-root >/dev/null 2>&1 || return 1
+  wp_try user list --field=user_login --path="$site_dir" --allow-root >/dev/null 2>&1 || return 1
+
+  if [ -n "$expected_url" ]; then
+    local home_url
+    home_url="$(wp_try option get home --path="$site_dir" --allow-root 2>/dev/null || true)"
+    [ -z "$home_url" ] || [ "$home_url" = "$expected_url" ] || return 1
+  fi
+
+  return 0
 }
 
 sanitize_marker_field() {
@@ -721,9 +740,16 @@ SQL
   if wp core is-installed --path="$SITE_DIR" --allow-root --quiet 2>/dev/null; then
     echo "  ⏭ $SLUG 이미 설치됨 — 자격증명만 저장하고 건너뜀"
     finalize_site_setup "$SLUG" "$DOMAIN" "$SITE_DIR"
-    EXISTING_PASS=$(wp user get admin --field=user_pass --path="$SITE_DIR" --allow-root 2>/dev/null || echo "N/A")
     APP_PASS=$(wp user application-password create 1 "auto-posting-$(date +%s)" \
-      --porcelain --path="$SITE_DIR" --allow-root 2>/dev/null || echo "N/A")
+      --porcelain --path="$SITE_DIR" --allow-root 2>/dev/null || true)
+    if [ -z "$APP_PASS" ]; then
+      SITE_LAST_ERROR="기존 사이트 앱 비밀번호 생성 실패"
+      return 1
+    fi
+    if ! validate_local_wordpress_runtime "$SITE_DIR" "$SITE_URL"; then
+      SITE_LAST_ERROR="기존 사이트 런타임 검증 실패"
+      return 1
+    fi
     jq ". += [{
       \"slug\": \"$SLUG\",
       \"domain\": \"$DOMAIN\",
@@ -878,7 +904,16 @@ footer, .wp-block-template-part:last-child {
   }
 
   APP_PASS=$(wp user application-password create 1 "auto-posting" \
-    --porcelain --path="$SITE_DIR" --allow-root 2>/dev/null) || APP_PASS="N/A"
+    --porcelain --path="$SITE_DIR" --allow-root 2>/dev/null || true)
+  if [ -z "$APP_PASS" ]; then
+    SITE_LAST_ERROR="앱 비밀번호 생성 실패"
+    return 1
+  fi
+
+  if ! validate_local_wordpress_runtime "$SITE_DIR" "$SITE_URL"; then
+    SITE_LAST_ERROR="WordPress 런타임 검증 실패"
+    return 1
+  fi
 
   jq ". += [{
     \"slug\": \"$SLUG\",
@@ -971,6 +1006,15 @@ echo "--- Nginx 설정 검증 ---"
 nginx -t && systemctl reload nginx
 ensure_allmyreview_certificate
 ensure_system_cron_runner
+
+if [ "${#SUCCESSFUL_SITES[@]}" -gt 0 ] && [ -x "$POST_DEPLOY_REPAIR_SCRIPT" -o -f "$POST_DEPLOY_REPAIR_SCRIPT" ]; then
+  echo ""
+  echo "--- 설치 후 WordPress 런타임 검증 ---"
+  POST_DEPLOY_SLUGS="$(IFS=,; echo "${SUCCESSFUL_SITES[*]}")"
+  if ! bash "$POST_DEPLOY_REPAIR_SCRIPT" --slugs "$POST_DEPLOY_SLUGS"; then
+    echo "  ⚠ 일부 신규 사이트의 런타임 보강/검증이 실패했습니다. 로그를 확인해주세요."
+  fi
+fi
 
 echo ""
 echo "=========================================="

@@ -13,6 +13,37 @@ WP_CRON_RUNNER_PATH="/usr/local/bin/wp-bulk-run-cron.sh"
 WP_CRON_SCHEDULE_PATH="/etc/cron.d/wp-bulk-run-cron"
 WP_CLI_TIMEOUT="${WP_CLI_TIMEOUT:-20}"
 WP_LIGHT_MODE="${WP_LIGHT_MODE:-1}"
+REMOTE_VALIDATE_TIMEOUT="${REMOTE_VALIDATE_TIMEOUT:-12}"
+TARGET_SLUGS_RAW=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --slugs)
+      TARGET_SLUGS_RAW="${2:-}"
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
+
+if [ -f /root/.wp-bulk-credentials ]; then
+  # shellcheck disable=SC1091
+  source /root/.wp-bulk-credentials
+fi
+
+declare -A TARGET_SLUGS=()
+if [ -n "$TARGET_SLUGS_RAW" ]; then
+  IFS=',' read -r -a __slug_array <<< "$TARGET_SLUGS_RAW"
+  for __slug in "${__slug_array[@]}"; do
+    __slug="$(echo "$__slug" | xargs)"
+    if [ -n "$__slug" ]; then
+      TARGET_SLUGS["$__slug"]=1
+    fi
+  done
+fi
 
 if [ ! -f "$CREDS_FILE" ]; then
   echo "Error: $CREDS_FILE 파일을 찾을 수 없습니다."
@@ -30,6 +61,15 @@ wp_try() {
   timeout "$WP_CLI_TIMEOUT" wp "$@"
 }
 
+slug_selected() {
+  local slug="$1"
+  if [ "${#TARGET_SLUGS[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  [[ -n "${TARGET_SLUGS[$slug]:-}" ]]
+}
+
 site_url_for_domain() {
   local domain="$1"
   if [[ "$domain" == *.allmyreview.site ]]; then
@@ -37,6 +77,127 @@ site_url_for_domain() {
   else
     printf 'http://%s' "$domain"
   fi
+}
+
+read_wp_config_value() {
+  local site_dir="$1"
+  local key="$2"
+  local wp_config="$site_dir/wp-config.php"
+
+  [ -f "$wp_config" ] || return 1
+
+  php -r '
+    $path = $argv[1];
+    $key = $argv[2];
+    $text = @file_get_contents($path);
+    if ($text === false) {
+      exit(1);
+    }
+    $pattern = "/define\\(\\s*[\"\\x27]" . preg_quote($key, "/") . "[\"\\x27]\\s*,\\s*[\"\\x27]([^\"\\x27]+)[\"\\x27]\\s*\\)/";
+    if (preg_match($pattern, $text, $matches)) {
+      echo $matches[1];
+    }
+  ' "$wp_config" "$key" 2>/dev/null || true
+}
+
+ensure_site_database_access() {
+  local slug="$1"
+  local site_dir="$2"
+  local cred_db_name="$3"
+  local cred_db_user="$4"
+  local cred_db_pass="$5"
+
+  if [ -z "${DB_ROOT_PASS:-}" ]; then
+    echo "  ⚠ DB_ROOT_PASS 없음 — DB 권한 복구는 건너뜀"
+    return 0
+  fi
+
+  local config_db_name config_db_user config_db_pass db_name db_user db_pass
+  config_db_name="$(read_wp_config_value "$site_dir" "DB_NAME")"
+  config_db_user="$(read_wp_config_value "$site_dir" "DB_USER")"
+  config_db_pass="$(read_wp_config_value "$site_dir" "DB_PASSWORD")"
+
+  db_name="${config_db_name:-$cred_db_name}"
+  db_user="${config_db_user:-$cred_db_user}"
+  db_pass="${config_db_pass:-$cred_db_pass}"
+
+  if [ -z "$db_name" ] || [ -z "$db_user" ] || [ -z "$db_pass" ] || [ "$db_pass" = "(existing)" ]; then
+    echo "  ⚠ DB 정보 부족 — DB 권한 복구는 건너뜀"
+    return 0
+  fi
+
+  mysql -u root -p"$DB_ROOT_PASS" <<SQL >/dev/null 2>&1 || {
+CREATE DATABASE IF NOT EXISTS \`$db_name\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$db_user'@'localhost' IDENTIFIED BY '$db_pass';
+ALTER USER '$db_user'@'localhost' IDENTIFIED BY '$db_pass';
+GRANT ALL PRIVILEGES ON \`$db_name\`.* TO '$db_user'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+    echo "  ⚠ DB 권한 복구 실패"
+    return 1
+  }
+
+  return 0
+}
+
+validate_local_wordpress_runtime() {
+  local site_dir="$1"
+  local expected_url="$2"
+
+  wp_try core is-installed --path="$site_dir" --allow-root >/dev/null 2>&1 || return 1
+  wp_try option get home --path="$site_dir" --allow-root >/dev/null 2>&1 || return 1
+  wp_try option get siteurl --path="$site_dir" --allow-root >/dev/null 2>&1 || return 1
+
+  if [ -n "$expected_url" ]; then
+    local home_url
+    home_url="$(wp_try option get home --path="$site_dir" --allow-root 2>/dev/null || true)"
+    if [ -n "$home_url" ] && [ "$home_url" != "$expected_url" ]; then
+      wp_try option update home "$expected_url" --path="$site_dir" --allow-root --quiet >/dev/null 2>&1 || true
+      wp_try option update siteurl "$expected_url" --path="$site_dir" --allow-root --quiet >/dev/null 2>&1 || true
+    fi
+  fi
+
+  return 0
+}
+
+validate_remote_wordpress() {
+  local domain="$1"
+  local url
+  url="$(site_url_for_domain "$domain")"
+
+  local body
+  body="$(curl -fsS --connect-timeout 4 --max-time "$REMOTE_VALIDATE_TIMEOUT" \
+    -H "Accept: application/json" \
+    "$url/wp-json/" 2>/dev/null || true)"
+
+  [[ "$body" == *"namespaces"* ]]
+}
+
+ensure_application_password() {
+  local slug="$1"
+  local site_dir="$2"
+  local existing_app_pass="$3"
+
+  if [ -n "$existing_app_pass" ] && [ "$existing_app_pass" != "N/A" ] && [ "$existing_app_pass" != "null" ]; then
+    return 0
+  fi
+
+  local app_pass
+  app_pass="$(wp user application-password create 1 "auto-posting-$(date +%s)" \
+    --porcelain --path="$site_dir" --allow-root 2>/dev/null || true)"
+
+  if [ -z "$app_pass" ]; then
+    echo "  ⚠ 앱 비밀번호 재생성 실패"
+    return 1
+  fi
+
+  jq \
+    --arg slug "$slug" \
+    --arg app_pass "$app_pass" \
+    'map(if .slug == $slug then .app_pass = $app_pass else . end)' \
+    "$CREDS_FILE" > "${CREDS_FILE}.tmp" && mv "${CREDS_FILE}.tmp" "$CREDS_FILE"
+
+  return 0
 }
 
 cert_covers_domain() {
@@ -597,8 +758,14 @@ finalize_site_setup() {
 SITE_COUNT=$(jq 'length' "$CREDS_FILE")
 UPDATED=0
 SKIPPED=0
+SELECTED_COUNT=0
+declare -a PROCESSED_SLUGS=()
+declare -a PROCESSED_DOMAINS=()
+declare -a PROCESSED_DIRS=()
+declare -a FAILED_SITES=()
+declare -a FAILED_REASONS=()
 
-echo "=== 기존 WordPress 사이트 SEO 보강 시작 ($SITE_COUNT개) ==="
+echo "=== 기존 WordPress 사이트 런타임 보강 시작 ($SITE_COUNT개) ==="
 
 for i in $(seq 0 $((SITE_COUNT - 1))); do
   SLUG=$(jq -r ".[$i].slug" "$CREDS_FILE")
@@ -606,13 +773,19 @@ for i in $(seq 0 $((SITE_COUNT - 1))); do
   SITE_DIR=$(jq -r ".[$i].site_dir // empty" "$CREDS_FILE")
   SITE_URL="$(site_url_for_domain "$DOMAIN")"
 
+  if ! slug_selected "$SLUG"; then
+    continue
+  fi
+
+  SELECTED_COUNT=$((SELECTED_COUNT + 1))
+
   if [ -z "$SITE_DIR" ]; then
     SITE_DIR="/var/www/$SLUG"
   fi
 
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  [$((i+1))/$SITE_COUNT] $SLUG"
+  echo "  [$SELECTED_COUNT] $SLUG"
   echo "  domain: $DOMAIN"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -622,13 +795,18 @@ for i in $(seq 0 $((SITE_COUNT - 1))); do
     continue
   fi
 
+  CRED_DB_NAME=$(jq -r ".[$i].db_name // empty" "$CREDS_FILE")
+  CRED_DB_USER=$(jq -r ".[$i].db_user // empty" "$CREDS_FILE")
+  CRED_DB_PASS=$(jq -r ".[$i].db_pass // empty" "$CREDS_FILE")
+  EXISTING_APP_PASS=$(jq -r ".[$i].app_pass // empty" "$CREDS_FILE")
+
+  ensure_site_database_access "$SLUG" "$SITE_DIR" "$CRED_DB_NAME" "$CRED_DB_USER" "$CRED_DB_PASS" || true
   finalize_site_setup "$SLUG" "$DOMAIN" "$SITE_DIR"
 
-  # llms.txt 생성 (credentials에서 사이트 정보 추출)
   BF_TITLE=$(jq -r ".[$i].title // empty" "$CREDS_FILE")
   BF_PERSONA=$(jq -r ".[$i].persona.name // empty" "$CREDS_FILE")
   BF_CATEGORIES=$(jq -r ".[$i].categories // [] | join(\",\")" "$CREDS_FILE" 2>/dev/null || echo "")
-  BF_TAGLINE=$(wp option get blogdescription --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || echo "")
+  BF_TAGLINE=$(wp_try option get blogdescription --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || echo "")
   if [ -n "$BF_TITLE" ]; then
     write_llms_txt "$DOMAIN" "$SITE_DIR" "$BF_TITLE" "$BF_TAGLINE" "$BF_PERSONA" "$BF_CATEGORIES"
   fi
@@ -636,21 +814,79 @@ for i in $(seq 0 $((SITE_COUNT - 1))); do
   if [ "$WP_LIGHT_MODE" != "1" ]; then
     wp_try rewrite flush --hard --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
   fi
+
+  ensure_application_password "$SLUG" "$SITE_DIR" "$EXISTING_APP_PASS" || true
+
+  if ! validate_local_wordpress_runtime "$SITE_DIR" "$SITE_URL"; then
+    echo "  ✗ 로컬 WordPress 런타임 검증 실패"
+    FAILED_SITES+=("$SLUG")
+    FAILED_REASONS+=("로컬 WordPress 런타임 검증 실패")
+    continue
+  fi
+
   refresh_credential_entry "$SLUG" "$DOMAIN" "$SITE_DIR" "$SITE_URL"
+  PROCESSED_SLUGS+=("$SLUG")
+  PROCESSED_DOMAINS+=("$DOMAIN")
+  PROCESSED_DIRS+=("$SITE_DIR")
   UPDATED=$((UPDATED + 1))
-  echo "  ✓ 보강 완료"
+  echo "  ✓ 로컬 런타임 보강 완료"
 done
 
 sync_cache
 
 echo ""
-echo "--- Nginx 설정 검증 ---"
+echo "--- Nginx / PHP-FPM 설정 검증 ---"
 nginx -t && systemctl reload nginx
 ensure_allmyreview_certificate
+systemctl reload php8.2-fpm 2>/dev/null || true
 ensure_system_cron_runner
 
 echo ""
+echo "--- 원격 WordPress 엔드포인트 검증 ---"
+for idx in "${!PROCESSED_SLUGS[@]}"; do
+  SLUG="${PROCESSED_SLUGS[$idx]}"
+  DOMAIN="${PROCESSED_DOMAINS[$idx]}"
+  SITE_DIR="${PROCESSED_DIRS[$idx]}"
+
+  echo "  [$((idx+1))/${#PROCESSED_SLUGS[@]}] $SLUG wp-json 확인 중..."
+
+  if validate_remote_wordpress "$DOMAIN"; then
+    echo "  ✓ wp-json 정상"
+    continue
+  fi
+
+  echo "  ⚠ wp-json 응답 이상 — 로컬 캐시 정리 후 재시도"
+  wp_try cache flush --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  if [ "$WP_LIGHT_MODE" != "1" ]; then
+    wp_try rewrite flush --hard --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  fi
+  systemctl reload php8.2-fpm 2>/dev/null || true
+  nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
+
+  if validate_remote_wordpress "$DOMAIN"; then
+    echo "  ✓ wp-json 복구 완료"
+    continue
+  fi
+
+  echo "  ✗ wp-json 응답 실패"
+  FAILED_SITES+=("$SLUG")
+  FAILED_REASONS+=("wp-json endpoint timeout/failure")
+done
+
+echo ""
 echo "=========================================="
-echo "  SEO 보강 완료: $UPDATED개"
+echo "  런타임 보강 완료: $UPDATED개"
 echo "  건너뜀: $SKIPPED개"
+if [ "${#FAILED_SITES[@]}" -gt 0 ]; then
+  echo "  검증 실패: ${#FAILED_SITES[@]}개"
+  for idx in "${!FAILED_SITES[@]}"; do
+    echo "    [${FAILED_SITES[$idx]}] ${FAILED_REASONS[$idx]}"
+  done
+else
+  echo "  검증 실패: 0개"
+fi
 echo "=========================================="
+
+if [ "${#FAILED_SITES[@]}" -gt 0 ]; then
+  exit 1
+fi

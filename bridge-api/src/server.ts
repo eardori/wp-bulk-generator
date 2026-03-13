@@ -13,6 +13,7 @@ import { seoOptimizeRoutes } from "./routes/seo-optimize.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { deployRoutes } from "./routes/deploy.js";
 import { ec2ProxyRoutes } from "./routes/ec2-proxy.js";
+import { repairSitesRoutes } from "./routes/repair-sites.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -85,6 +86,7 @@ await app.register(publishArticlesRoutes);
 await app.register(seoOptimizeRoutes);
 await app.register(dashboardRoutes);
 await app.register(deployRoutes);
+await app.register(repairSitesRoutes);
 await app.register(ec2ProxyRoutes);
 
 // Graceful shutdown
