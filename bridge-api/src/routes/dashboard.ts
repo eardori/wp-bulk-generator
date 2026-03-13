@@ -1,4 +1,8 @@
+import { execFileSync } from "child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import type { FastifyInstance } from "fastify";
+import { tmpdir } from "os";
+import { join } from "path";
 import { setupSSE } from "../utils/sse.js";
 import { fetchCredentials, fetchGroups } from "../lib/ec2-client.js";
 
@@ -10,6 +14,7 @@ type SiteCredential = {
   admin_user: string;
   admin_pass: string;
   app_pass: string;
+  site_dir?: string;
 };
 
 type WPPost = {
@@ -36,8 +41,27 @@ type SiteGroup = {
 // 인메모리 캐시 (TTL 5분)
 const CACHE_TTL = 5 * 60 * 1000;
 const postCache = new Map<string, CacheEntry>();
+const WP_SITES_ROOT = process.env.WP_SITES_ROOT || "/var/www";
 
-async function fetchWPPosts(site: SiteCredential, perPage = 15): Promise<WPPost[]> {
+type RemotePostsResult = {
+  ok: boolean;
+  posts: WPPost[];
+};
+
+type RemoteCountResult = {
+  ok: boolean;
+  totalCount: number;
+};
+
+function getLocalSiteDir(site: SiteCredential): string {
+  return site.site_dir || join(WP_SITES_ROOT, site.slug);
+}
+
+function hasLocalWordPress(site: SiteCredential): boolean {
+  return existsSync(join(getLocalSiteDir(site), "wp-config.php"));
+}
+
+async function fetchRemoteWPPosts(site: SiteCredential, perPage = 15): Promise<RemotePostsResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
@@ -46,14 +70,14 @@ async function fetchWPPosts(site: SiteCredential, perPage = 15): Promise<WPPost[
       `${site.url}/wp-json/wp/v2/posts?per_page=${perPage}&_fields=id,title,link,date,status&status=publish&orderby=date&order=desc`,
       { headers: { Authorization: `Basic ${auth}` }, signal: controller.signal }
     );
-    if (!res.ok) return [];
+    if (!res.ok) return { ok: false, posts: [] };
     const data = await res.json();
-    return Array.isArray(data) ? data : [];
-  } catch { return []; }
+    return { ok: true, posts: Array.isArray(data) ? data : [] };
+  } catch { return { ok: false, posts: [] }; }
   finally { clearTimeout(timeout); }
 }
 
-async function fetchWPPostCount(site: SiteCredential): Promise<number> {
+async function fetchRemoteWPPostCount(site: SiteCredential): Promise<RemoteCountResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
@@ -62,11 +86,66 @@ async function fetchWPPostCount(site: SiteCredential): Promise<number> {
       `${site.url}/wp-json/wp/v2/posts?per_page=1&_fields=id&status=publish`,
       { headers: { Authorization: `Basic ${auth}` }, signal: controller.signal }
     );
-    if (!res.ok) return 0;
+    if (!res.ok) return { ok: false, totalCount: 0 };
     const total = res.headers.get("X-WP-Total");
-    return total ? parseInt(total, 10) : 0;
-  } catch { return 0; }
+    return { ok: true, totalCount: total ? parseInt(total, 10) : 0 };
+  } catch { return { ok: false, totalCount: 0 }; }
   finally { clearTimeout(timeout); }
+}
+
+function fetchLocalSiteData(site: SiteCredential, perPage = 15): CacheEntry {
+  const siteDir = getLocalSiteDir(site);
+  const tempDir = mkdtempSync(join(tmpdir(), "wpbulk-dashboard-"));
+  const scriptPath = join(tempDir, "dashboard-local.php");
+
+  try {
+    writeFileSync(
+      scriptPath,
+      `<?php
+$posts = get_posts([
+  'post_type' => 'post',
+  'post_status' => 'publish',
+  'posts_per_page' => ${perPage},
+  'orderby' => 'date',
+  'order' => 'DESC',
+]);
+
+$payload = array_map(function ($post) {
+  return [
+    'id' => (int) $post->ID,
+    'title' => ['rendered' => (string) get_the_title($post)],
+    'link' => (string) get_permalink($post),
+    'date' => (string) get_post_time(DATE_ATOM, true, $post),
+    'status' => 'publish',
+  ];
+}, $posts);
+
+$counts = wp_count_posts('post');
+$total_count = isset($counts->publish) ? (int) $counts->publish : count($payload);
+
+echo wp_json_encode([
+  'posts' => $payload,
+  'totalCount' => $total_count,
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+`
+    );
+
+    const output = execFileSync(
+      "wp",
+      ["eval-file", scriptPath, `--path=${siteDir}`, "--allow-root"],
+      { encoding: "utf8", timeout: 45000 }
+    ).trim();
+
+    const parsed = JSON.parse(output) as Partial<CacheEntry>;
+
+    return {
+      posts: Array.isArray(parsed.posts) ? parsed.posts as WPPost[] : [],
+      totalCount: typeof parsed.totalCount === "number" ? parsed.totalCount : 0,
+      cachedAt: Date.now(),
+    };
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 async function fetchSiteData(site: SiteCredential): Promise<CacheEntry> {
@@ -75,12 +154,26 @@ async function fetchSiteData(site: SiteCredential): Promise<CacheEntry> {
     return cached;
   }
 
-  const [posts, totalCount] = await Promise.all([
-    fetchWPPosts(site, 15),
-    fetchWPPostCount(site),
+  const [postsResult, countResult] = await Promise.all([
+    fetchRemoteWPPosts(site, 15),
+    fetchRemoteWPPostCount(site),
   ]);
 
-  const entry: CacheEntry = { posts, totalCount, cachedAt: Date.now() };
+  if (!postsResult.ok || !countResult.ok) {
+    if (!hasLocalWordPress(site)) {
+      throw new Error(`WordPress unavailable for ${site.slug}`);
+    }
+
+    const localEntry = fetchLocalSiteData(site, 15);
+    postCache.set(site.slug, localEntry);
+    return localEntry;
+  }
+
+  const entry: CacheEntry = {
+    posts: postsResult.posts,
+    totalCount: countResult.totalCount,
+    cachedAt: Date.now(),
+  };
   postCache.set(site.slug, entry);
   return entry;
 }
