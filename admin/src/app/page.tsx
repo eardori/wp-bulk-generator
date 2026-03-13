@@ -44,6 +44,12 @@ export type DeployStatus = {
   total: number;
   currentSite: string;
   log: string[];
+  successCount?: number;
+  failureCount?: number;
+  failedSites?: Array<{
+    slug: string;
+    reason: string;
+  }>;
   credentials?: {
     admin_user: string;
     admin_pass: string;

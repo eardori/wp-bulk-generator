@@ -13,8 +13,14 @@ type DeployConfig = {
   domain?: string;
 };
 
+type DeployFailure = {
+  slug: string;
+  reason: string;
+};
+
 type StoredCredential = {
   slug?: string;
+  site_slug?: string;
   domain?: string;
   url?: string;
   admin_user?: string;
@@ -60,6 +66,92 @@ function readExistingSites(): DeployConfig[] {
     const raw = execSync(`sudo cat ${CREDS_PATH}`, { timeout: 10000 }).toString();
     return JSON.parse(raw);
   } catch { return []; }
+}
+
+type DeployMarker =
+  | {
+      type: "site_start";
+      index: number;
+      total: number;
+      slug: string;
+      title: string;
+    }
+  | {
+      type: "site_retry";
+      slug: string;
+      attempt: number;
+      maxAttempts: number;
+      reason: string;
+    }
+  | {
+      type: "site_success";
+      slug: string;
+      title: string;
+    }
+  | {
+      type: "site_failure";
+      slug: string;
+      reason: string;
+    }
+  | {
+      type: "summary";
+      successCount: number;
+      failureCount: number;
+    };
+
+function parseDeployMarker(line: string): DeployMarker | null {
+  if (!line.startsWith("__WPBULK__")) {
+    return null;
+  }
+
+  const parts = line.slice("__WPBULK__".length).split("|");
+  const kind = parts[0];
+
+  if (kind === "SITE_START") {
+    return {
+      type: "site_start",
+      index: Number(parts[1]) || 0,
+      total: Number(parts[2]) || 0,
+      slug: parts[3] || "",
+      title: parts[4] || parts[3] || "",
+    };
+  }
+
+  if (kind === "SITE_RETRY") {
+    return {
+      type: "site_retry",
+      slug: parts[1] || "",
+      attempt: Number(parts[2]) || 0,
+      maxAttempts: Number(parts[3]) || 0,
+      reason: parts[4] || "",
+    };
+  }
+
+  if (kind === "SITE_SUCCESS") {
+    return {
+      type: "site_success",
+      slug: parts[1] || "",
+      title: parts[2] || parts[1] || "",
+    };
+  }
+
+  if (kind === "SITE_FAILURE") {
+    return {
+      type: "site_failure",
+      slug: parts[1] || "",
+      reason: parts[2] || "알 수 없는 오류",
+    };
+  }
+
+  if (kind === "SUMMARY") {
+    return {
+      type: "summary",
+      successCount: Number(parts[1]) || 0,
+      failureCount: Number(parts[2]) || 0,
+    };
+  }
+
+  return null;
 }
 
 function summarizeDeployCredentials(
@@ -114,7 +206,9 @@ export async function deployRoutes(app: FastifyInstance) {
 
     // 기존 사이트 충돌 검사
     const existing = readExistingSites();
-    const existingSlugs = new Set(existing.map((s) => normalizeSlug(s.site_slug)).filter(Boolean));
+    const existingSlugs = new Set(
+      (existing as StoredCredential[]).map((s) => normalizeSlug(s.site_slug ?? s.slug)).filter(Boolean)
+    );
     const conflicts: string[] = [];
     for (const c of configs) {
       const s = normalizeSlug(c.site_slug);
@@ -134,6 +228,11 @@ export async function deployRoutes(app: FastifyInstance) {
 
       send({ type: "progress", message: "배포 스크립트 실행 시작..." });
 
+      let completed = 0;
+      let successCount = 0;
+      let failureCount = 0;
+      const failedSites: DeployFailure[] = [];
+
       // 배포 스크립트 실행 (stdout/stderr 실시간 스트리밍)
       const child = exec(`sudo bash ${DEPLOY_SCRIPT} ${tmpConfig}`, {
         timeout: 600000,
@@ -143,6 +242,61 @@ export async function deployRoutes(app: FastifyInstance) {
       child.stdout?.on("data", (data: string) => {
         const lines = data.split("\n").filter(Boolean);
         for (const line of lines) {
+          const marker = parseDeployMarker(line);
+          if (marker) {
+            if (marker.type === "site_start") {
+              send({
+                type: "progress",
+                progress: completed,
+                total: marker.total || configs.length,
+                currentSite: marker.title || marker.slug,
+                message: `[${marker.index}/${marker.total || configs.length}] ${marker.title || marker.slug} 설치 중...`,
+              });
+              continue;
+            }
+
+            if (marker.type === "site_retry") {
+              send({
+                type: "log",
+                message: `${marker.slug} 재시도 (${marker.attempt}/${marker.maxAttempts})${marker.reason ? ` - ${marker.reason}` : ""}`,
+              });
+              continue;
+            }
+
+            if (marker.type === "site_success") {
+              completed += 1;
+              successCount += 1;
+              send({
+                type: "progress",
+                progress: completed,
+                total: configs.length,
+                currentSite: marker.title || marker.slug,
+                message: `${marker.title || marker.slug} 설치 완료 (${completed}/${configs.length})`,
+              });
+              continue;
+            }
+
+            if (marker.type === "site_failure") {
+              completed += 1;
+              failureCount += 1;
+              failedSites.push({ slug: marker.slug, reason: marker.reason });
+              send({
+                type: "progress",
+                progress: completed,
+                total: configs.length,
+                currentSite: marker.slug,
+                message: `${marker.slug} 설치 실패, 다음 사이트로 진행합니다. (${completed}/${configs.length})`,
+              });
+              continue;
+            }
+
+            if (marker.type === "summary") {
+              successCount = marker.successCount;
+              failureCount = marker.failureCount;
+              continue;
+            }
+          }
+
           send({ type: "log", message: line });
         }
       });
@@ -189,7 +343,13 @@ export async function deployRoutes(app: FastifyInstance) {
         progress: configs.length,
         total: configs.length,
         currentSite: "",
-        message: "배포 완료",
+        successCount,
+        failureCount,
+        failedSites,
+        message:
+          failureCount > 0
+            ? `배포 완료 (${successCount}개 성공, ${failureCount}개 실패)`
+            : "배포 완료",
       });
     } catch (err) {
       send({

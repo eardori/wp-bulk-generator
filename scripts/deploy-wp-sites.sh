@@ -3,7 +3,7 @@
 # AI가 생성한 JSON 설정을 받아 WordPress 사이트를 대량 설치
 # 사용법: ./deploy-wp-sites.sh sites-config.json
 
-set -euo pipefail
+set -uo pipefail
 
 CONFIG_FILE="${1:-}"
 
@@ -53,6 +53,28 @@ sync_cache() {
 
 wp_try() {
   timeout "$WP_CLI_TIMEOUT" wp "$@"
+}
+
+sanitize_marker_field() {
+  printf '%s' "${1:-}" | tr '\r\n|' '   '
+}
+
+emit_marker() {
+  printf '__WPBULK__%s\n' "$1"
+}
+
+build_db_identifier() {
+  local slug="$1"
+  local normalized="${slug//-/_}"
+  local short="${normalized:0:6}"
+  local hash
+  hash="$(printf '%s' "$slug" | sha256sum | cut -c1-6)"
+
+  if [ -z "$short" ]; then
+    short="site"
+  fi
+
+  printf 'wp_%s_%s' "$short" "$hash"
 }
 
 ensure_system_cron_runner() {
@@ -661,56 +683,34 @@ if [ "$ALREADY_DONE" -gt 0 ]; then
   echo "=== 이전 실행에서 $ALREADY_DONE 개 완료됨 — 이어서 설치 ==="
 fi
 
-for i in $(seq 0 $(($SITE_COUNT - 1))); do
-  # JSON에서 설정 추출
-  SLUG=$(jq -r ".[$i].site_slug" "$CONFIG_FILE")
-  TITLE=$(jq -r ".[$i].site_title" "$CONFIG_FILE")
-  TAGLINE=$(jq -r ".[$i].tagline" "$CONFIG_FILE")
-  DOMAIN=$(jq -r ".[$i].domain // empty" "$CONFIG_FILE")
-  PRIMARY=$(jq -r ".[$i].color_scheme.primary" "$CONFIG_FILE")
-  SECONDARY=$(jq -r ".[$i].color_scheme.secondary" "$CONFIG_FILE")
-  ACCENT=$(jq -r ".[$i].color_scheme.accent" "$CONFIG_FILE")
-  STYLE=$(jq -r ".[$i].color_scheme.style" "$CONFIG_FILE")
-  HOMEPAGE=$(jq -r ".[$i].layout_preference.homepage" "$CONFIG_FILE")
-  SIDEBAR=$(jq -r ".[$i].layout_preference.sidebar" "$CONFIG_FILE")
-  PERSONA_NAME=$(jq -r ".[$i].persona.name" "$CONFIG_FILE")
-  PERSONA_BIO=$(jq -r ".[$i].persona.bio" "$CONFIG_FILE")
-  SITE_URL="$(site_url_for_domain "$DOMAIN")"
+SUCCESSFUL_SITES=()
+FAILED_SITES=()
+FAILED_REASONS=()
 
-  # 도메인 없으면 IP + 포트 또는 서브디렉토리
-  if [ -z "$DOMAIN" ]; then
-    DOMAIN="$SLUG.local"
-    SITE_URL="$(site_url_for_domain "$DOMAIN")"
-  fi
-
-  echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  [$((i+1))/$SITE_COUNT] $TITLE"
-  echo "  slug: $SLUG | domain: $DOMAIN"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
+install_site_once() {
   # ---- 이미 완료된 사이트면 즉시 건너뜀 ----
   ALREADY_IN_CREDS=$(jq -r --arg s "$SLUG" '.[] | select(.slug == $s) | .slug' "$CREDS_FILE" 2>/dev/null || echo "")
   if [ -n "$ALREADY_IN_CREDS" ]; then
     echo "  ⏭ [$((i+1))/$SITE_COUNT] $SLUG 이미 완료됨 — 건너뜀"
-    continue
+    return 0
   fi
 
   # ---- 1. DB 생성 ----
   echo "  [1/7] DB 생성..."
-  DB_NAME="wp_${SLUG//-/_}"
-  DB_USER="wp_${SLUG//-/_}"
-  # DB 이름 길이 제한 (16자)
-  DB_NAME="${DB_NAME:0:16}"
-  DB_USER="${DB_USER:0:16}"
+  DB_NAME="$(build_db_identifier "$SLUG")"
+  DB_USER="$DB_NAME"
   DB_PASS="$(openssl rand -base64 12)"
 
-  mysql -u root -p"$DB_ROOT_PASS" -e "
-    CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-    CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
-    GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';
-    FLUSH PRIVILEGES;
-  " 2>/dev/null
+  mysql -u root -p"$DB_ROOT_PASS" <<SQL >/dev/null 2>&1 || {
+CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
+ALTER USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
+GRANT ALL PRIVILEGES ON \`$DB_NAME\`.* TO '$DB_USER'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+    SITE_LAST_ERROR="DB 생성 또는 권한 설정 실패"
+    return 1
+  }
 
   # ---- 2. WordPress 다운로드 & 설치 ----
   echo "  [2/7] WordPress 설치..."
@@ -740,11 +740,13 @@ for i in $(seq 0 $(($SITE_COUNT - 1))); do
     }]" "$CREDS_FILE" > "${CREDS_FILE}.tmp" && mv "${CREDS_FILE}.tmp" "$CREDS_FILE"
     sync_cache
     echo "  ✓ $SLUG 건너뜀 (이미 설치됨)"
-    continue
+    return 0
   fi
 
-  # 파일은 있지만 설치 미완료인 경우 --force로 덮어쓰기
-  wp core download --path="$SITE_DIR" --locale=ko_KR --allow-root --quiet --force
+  wp core download --path="$SITE_DIR" --locale=ko_KR --allow-root --quiet --force || {
+    SITE_LAST_ERROR="WordPress 코어 다운로드 실패"
+    return 1
+  }
 
   wp config create \
     --path="$SITE_DIR" \
@@ -752,12 +754,15 @@ for i in $(seq 0 $(($SITE_COUNT - 1))); do
     --dbuser="$DB_USER" \
     --dbpass="$DB_PASS" \
     --dbhost="localhost" \
-    --allow-root --quiet --force
+    --allow-root --quiet --force || {
+      SITE_LAST_ERROR="wp-config 생성 실패"
+      return 1
+    }
 
   # Redis 설정 추가
-  wp config set WP_REDIS_HOST "127.0.0.1" --path="$SITE_DIR" --allow-root --quiet
-  wp config set WP_REDIS_DATABASE "$i" --path="$SITE_DIR" --allow-root --quiet  # 사이트별 다른 DB 번호
-  wp config set WP_CACHE true --raw --path="$SITE_DIR" --allow-root --quiet
+  wp config set WP_REDIS_HOST "127.0.0.1" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  wp config set WP_REDIS_DATABASE "$i" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  wp config set WP_CACHE true --raw --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
 
   wp core install \
     --path="$SITE_DIR" \
@@ -766,17 +771,19 @@ for i in $(seq 0 $(($SITE_COUNT - 1))); do
     --admin_user="$WP_ADMIN_USER" \
     --admin_password="$WP_ADMIN_PASS" \
     --admin_email="$WP_ADMIN_EMAIL" \
-    --allow-root --quiet
+    --allow-root --quiet || {
+      SITE_LAST_ERROR="WordPress 설치 실패"
+      return 1
+    }
 
   # ---- 3. 기본 설정 ----
   echo "  [3/7] 기본 설정..."
-  wp option update blogdescription "$TAGLINE" --path="$SITE_DIR" --allow-root --quiet
-  wp option update permalink_structure "/%postname%/" --path="$SITE_DIR" --allow-root --quiet
-  wp option update timezone_string "Asia/Seoul" --path="$SITE_DIR" --allow-root --quiet
-  wp option update date_format "Y년 m월 d일" --path="$SITE_DIR" --allow-root --quiet
-  wp option update blog_public 1 --path="$SITE_DIR" --allow-root --quiet
+  wp option update blogdescription "$TAGLINE" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  wp option update permalink_structure "/%postname%/" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  wp option update timezone_string "Asia/Seoul" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  wp option update date_format "Y년 m월 d일" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  wp option update blog_public 1 --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
 
-  # 기본 글/페이지/댓글 삭제
   wp post delete 1 --force --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
   wp post delete 2 --force --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
   wp comment delete 1 --force --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
@@ -789,7 +796,6 @@ for i in $(seq 0 $(($SITE_COUNT - 1))); do
       wp term create category "$cat" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
     fi
   done <<< "$CATEGORIES"
-  # 기본 카테고리(미분류) 삭제
   wp term delete category 1 --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
 
   # ---- 5. 플러그인 설치 ----
@@ -798,24 +804,18 @@ for i in $(seq 0 $(($SITE_COUNT - 1))); do
   wp plugin install redis-cache --activate --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
   wp plugin install wp-fastest-cache --activate --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
   wp plugin install redirection --activate --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
-
-  # Redis 캐시 활성화
   wp redis enable --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
 
-  # ---- 5.5. robots.txt & llms.txt 생성 (AI 봇 크롤링 허용 + GEO) ----
+  # ---- 5.5. robots.txt & llms.txt 생성 ----
   echo "  [5.5/7] robots.txt & llms.txt & SEO 설정..."
   write_robots_txt "$DOMAIN" "$SITE_DIR"
-  chown www-data:www-data "$SITE_DIR/robots.txt"
+  chown www-data:www-data "$SITE_DIR/robots.txt" 2>/dev/null || true
 
   CATS_COMMA=$(jq -r ".[$i].categories | join(\",\")" "$CONFIG_FILE" 2>/dev/null || echo "")
   write_llms_txt "$DOMAIN" "$SITE_DIR" "$TITLE" "$TAGLINE" "$PERSONA_NAME" "$CATS_COMMA"
 
   # ---- 6. 테마 & 커스텀 CSS ----
   echo "  [6/7] 테마 & CSS 커스터마이징..."
-
-  # 기본 테마(twentytwentyfour) 사용 — 이미 포함됨
-  # 커스텀 CSS로 색상/스타일 오버라이드
-
   wp eval "
     \$css = '
 /* AI Generated Custom Style — $SLUG */
@@ -872,13 +872,14 @@ footer, .wp-block-template-part:last-child {
     --post_status=publish \
     --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
 
-  finalize_site_setup "$SLUG" "$DOMAIN" "$SITE_DIR"
+  finalize_site_setup "$SLUG" "$DOMAIN" "$SITE_DIR" || {
+    SITE_LAST_ERROR="사이트 마무리 설정 실패"
+    return 1
+  }
 
-  # Application Password 생성 (REST API 자동 포스팅용)
   APP_PASS=$(wp user application-password create 1 "auto-posting" \
     --porcelain --path="$SITE_DIR" --allow-root 2>/dev/null) || APP_PASS="N/A"
 
-  # 결과 저장
   jq ". += [{
     \"slug\": \"$SLUG\",
     \"domain\": \"$DOMAIN\",
@@ -891,10 +892,77 @@ footer, .wp-block-template-part:last-child {
     \"db_user\": \"$DB_USER\",
     \"db_pass\": \"$DB_PASS\",
     \"url\": \"$SITE_URL\"
-  }]" "$CREDS_FILE" > "${CREDS_FILE}.tmp" && mv "${CREDS_FILE}.tmp" "$CREDS_FILE"
+  }]" "$CREDS_FILE" > "${CREDS_FILE}.tmp" && mv "${CREDS_FILE}.tmp" "$CREDS_FILE" || {
+    SITE_LAST_ERROR="자격증명 저장 실패"
+    return 1
+  }
 
   sync_cache
   echo "  ✓ $SLUG 설치 완료"
+  return 0
+}
+
+for i in $(seq 0 $(($SITE_COUNT - 1))); do
+  # JSON에서 설정 추출
+  SLUG=$(jq -r ".[$i].site_slug" "$CONFIG_FILE")
+  TITLE=$(jq -r ".[$i].site_title" "$CONFIG_FILE")
+  TAGLINE=$(jq -r ".[$i].tagline" "$CONFIG_FILE")
+  DOMAIN=$(jq -r ".[$i].domain // empty" "$CONFIG_FILE")
+  PRIMARY=$(jq -r ".[$i].color_scheme.primary" "$CONFIG_FILE")
+  SECONDARY=$(jq -r ".[$i].color_scheme.secondary" "$CONFIG_FILE")
+  ACCENT=$(jq -r ".[$i].color_scheme.accent" "$CONFIG_FILE")
+  STYLE=$(jq -r ".[$i].color_scheme.style" "$CONFIG_FILE")
+  HOMEPAGE=$(jq -r ".[$i].layout_preference.homepage" "$CONFIG_FILE")
+  SIDEBAR=$(jq -r ".[$i].layout_preference.sidebar" "$CONFIG_FILE")
+  PERSONA_NAME=$(jq -r ".[$i].persona.name" "$CONFIG_FILE")
+  PERSONA_BIO=$(jq -r ".[$i].persona.bio" "$CONFIG_FILE")
+  SITE_URL="$(site_url_for_domain "$DOMAIN")"
+
+  # 도메인 없으면 IP + 포트 또는 서브디렉토리
+  if [ -z "$DOMAIN" ]; then
+    DOMAIN="$SLUG.local"
+    SITE_URL="$(site_url_for_domain "$DOMAIN")"
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  [$((i+1))/$SITE_COUNT] $TITLE"
+  echo "  slug: $SLUG | domain: $DOMAIN"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  emit_marker "SITE_START|$((i+1))|$SITE_COUNT|$SLUG|$(sanitize_marker_field "$TITLE")"
+
+  MAX_ATTEMPTS=2
+  ATTEMPT=1
+  SITE_SUCCESS=0
+  SITE_LAST_ERROR=""
+
+  while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
+    if [ "$ATTEMPT" -gt 1 ]; then
+      echo "  ↻ 재시도 ($ATTEMPT/$MAX_ATTEMPTS)..."
+      emit_marker "SITE_RETRY|$SLUG|$ATTEMPT|$MAX_ATTEMPTS|$(sanitize_marker_field "$SITE_LAST_ERROR")"
+      sleep 2
+    fi
+
+    SITE_LAST_ERROR=""
+    if install_site_once; then
+      SITE_SUCCESS=1
+      SUCCESSFUL_SITES+=("$SLUG")
+      emit_marker "SITE_SUCCESS|$SLUG|$(sanitize_marker_field "$TITLE")"
+      break
+    fi
+
+    SITE_LAST_ERROR="${SITE_LAST_ERROR:-설치 중 알 수 없는 오류}"
+    echo "  ✗ $SLUG 설치 실패: $SITE_LAST_ERROR"
+    ATTEMPT=$((ATTEMPT + 1))
+  done
+
+  if [ "$SITE_SUCCESS" -ne 1 ]; then
+    FAILED_SITES+=("$SLUG")
+    FAILED_REASONS+=("$SITE_LAST_ERROR")
+    echo "  ⚠ $SLUG는 실패로 기록하고 다음 사이트로 진행합니다."
+    emit_marker "SITE_FAILURE|$SLUG|$(sanitize_marker_field "$SITE_LAST_ERROR")"
+    continue
+  fi
 done
 
 # Nginx 설정 테스트 & 리로드
@@ -906,7 +974,7 @@ ensure_system_cron_runner
 
 echo ""
 echo "=========================================="
-echo "  $SITE_COUNT 개 WordPress 사이트 설치 완료!"
+echo "  $SITE_COUNT 개 WordPress 사이트 처리 완료!"
 echo "=========================================="
 echo ""
 echo "  관리자 계정: $WP_ADMIN_USER"
@@ -917,4 +985,12 @@ echo ""
 echo "  설치된 사이트:"
 jq -r '.[] | "    [\(.slug)] \(.title) → \(.url)/wp-admin"' "$CREDS_FILE"
 echo ""
+if [ "${#FAILED_SITES[@]}" -gt 0 ]; then
+  echo "  실패한 사이트:"
+  for idx in "${!FAILED_SITES[@]}"; do
+    echo "    [${FAILED_SITES[$idx]}] ${FAILED_REASONS[$idx]}"
+  done
+  echo ""
+fi
+emit_marker "SUMMARY|${#SUCCESSFUL_SITES[@]}|${#FAILED_SITES[@]}"
 echo "=========================================="

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-13: 사이트 배포 중 개별 실패가 전체 중단시키던 문제 수정
+- **사이트별 실패 격리**: `deploy-wp-sites.sh`가 한 사이트 설치 실패 시 전체 종료하지 않고, 실패를 기록한 뒤 다음 사이트 설치를 계속 진행하도록 변경
+- **자동 재시도 추가**: 개별 사이트 설치 실패 시 1회 자동 재시도 후에도 실패하면 목록에 남기고 다음 사이트로 이동
+- **DB 계정 충돌/비밀번호 불일치 보강**: DB 계정명을 slug 해시 기반으로 안정화하고, 기존 사용자도 `ALTER USER`로 비밀번호를 다시 맞춰 `1045 Access denied` 재발 가능성 완화
+- **진행률/실패 요약 강화**: Bridge deploy SSE가 사이트별 시작/성공/실패를 파싱해 진행률을 갱신하고, 완료 시 성공/실패 개수와 실패한 사이트 사유를 함께 전달
+- **배포 중복 보호 보강**: 기존 사이트 충돌 검사 시 credentials의 `slug`도 함께 보도록 수정
+
 ## 2026-03-13: 사이트 생성 Load failed 수정
 - **원인 확인**: `wp.multiful.ai`에서 `bridge.allmyreview.site`로 직접 SSE 연결 시 CORS 허용 origin이 예전 Vercel 도메인만 가리켜 브라우저에서 `Load failed` 발생
 - **Bridge CORS 보강**: `wp.multiful.ai`, `wp-bulk-generator.vercel.app`, 로컬 개발 origin과 `*.vercel.app` preview를 허용하도록 수정

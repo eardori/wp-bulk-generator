@@ -14,6 +14,13 @@ export default function DeployProgress({ status, onReset }: Props) {
   const credentialSites = Array.isArray(credentials?.sites) ? credentials.sites : [];
   const adminUser = typeof credentials?.admin_user === "string" ? credentials.admin_user : "";
   const adminPass = typeof credentials?.admin_pass === "string" ? credentials.admin_pass : "";
+  const failedSites = Array.isArray(status.failedSites) ? status.failedSites : [];
+  const failureCount = typeof status.failureCount === "number" ? status.failureCount : failedSites.length;
+  const successCount =
+    typeof status.successCount === "number"
+      ? status.successCount
+      : Math.max(credentialSites.length, status.total - failureCount);
+  const hasPartialFailure = failureCount > 0;
 
   useEffect(() => {
     if (logRef.current) {
@@ -63,14 +70,37 @@ export default function DeployProgress({ status, onReset }: Props) {
         {status.status === "done" && (
           <div className="space-y-6">
             <div className="text-center space-y-2">
-              <div className="text-5xl">&#10003;</div>
+              <div className={`text-5xl ${hasPartialFailure ? "text-amber-400" : ""}`}>&#10003;</div>
               <h3 className="text-2xl font-bold text-white">
-                {status.total}개 사이트 생성 완료!
+                {hasPartialFailure
+                  ? `${successCount}개 성공, ${failureCount}개 실패`
+                  : `${status.total}개 사이트 생성 완료!`}
               </h3>
               <p className="text-gray-400">
-                모든 WordPress 사이트가 성공적으로 설치되었습니다.
+                {hasPartialFailure
+                  ? "실패한 사이트는 건너뛰고 나머지 설치를 계속 진행했습니다. 아래 실패 목록을 확인해주세요."
+                  : "모든 WordPress 사이트가 성공적으로 설치되었습니다."}
               </p>
             </div>
+
+            {hasPartialFailure && (
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-5 space-y-3">
+                <h4 className="text-sm font-semibold text-amber-300 uppercase tracking-wider">
+                  실패한 사이트
+                </h4>
+                <div className="space-y-2 text-sm">
+                  {failedSites.map((site, index) => (
+                    <div
+                      key={`${site.slug}-${index}`}
+                      className="rounded-lg bg-gray-800/70 px-3 py-2"
+                    >
+                      <div className="font-medium text-white">{site.slug}</div>
+                      <div className="text-gray-400">{site.reason}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Credentials */}
             {credentials && (
