@@ -1,6 +1,14 @@
 import type { FastifyReply } from "fastify";
 
 export function setupSSE(reply: FastifyReply) {
+  const existingHeaders = reply.getHeaders();
+
+  for (const [name, value] of Object.entries(existingHeaders)) {
+    if (value !== undefined) {
+      reply.raw.setHeader(name, value);
+    }
+  }
+
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
