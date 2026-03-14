@@ -114,6 +114,38 @@ function cleanup_empty_html_blocks($html) {
   return trim((string) $html);
 }
 
+function cleanup_review_analysis_sections($html) {
+  $html = (string) $html;
+
+  $section_patterns = array(
+    '/<h[23][^>]*>\s*[^<]*(?:리뷰\s*데이터로\s*선정한\s*베스트\s*메뉴\s*선정\s*기준|베스트\s*메뉴\s*선정\s*기준|리뷰\s*기반\s*베스트\s*메뉴\s*추천)[^<]*<\/h[23]>\s*(?:(?:<p|<ul|<ol|<div)[\s\S]*?(?:<\/p>|<\/ul>|<\/ol>|<\/div>)\s*){0,5}/iu',
+    '/<p[^>]*>\s*<strong>\s*(?:리뷰\s*데이터로\s*선정한\s*베스트\s*메뉴\s*선정\s*기준|베스트\s*메뉴\s*선정\s*기준|리뷰\s*기반\s*베스트\s*메뉴\s*추천)\s*<\/strong>\s*<\/p>\s*(?:(?:<p|<ul|<ol|<div)[\s\S]*?(?:<\/p>|<\/ul>|<\/ol>|<\/div>)\s*){0,5}/iu',
+  );
+
+  foreach ($section_patterns as $pattern) {
+    $html = preg_replace($pattern, '', $html);
+  }
+
+  $block_patterns = array(
+    '/<p[^>]*>[\s\S]*?총\s*\d+\s*개(?:의)?\s*리뷰\s*데이터[\s\S]*?<\/p>/iu',
+    '/<p[^>]*>[\s\S]*?방문자들이\s*공통적으로\s*언급[\s\S]*?<\/p>/iu',
+    '/<p[^>]*>[\s\S]*?키워드가\s*상위권[\s\S]*?<\/p>/iu',
+    '/<p[^>]*>[\s\S]*?식사\s*경험의\s*만족도[\s\S]*?<\/p>/iu',
+    '/<p[^>]*>[\s\S]*?최적의\s*메뉴\s*조합[\s\S]*?<\/p>/iu',
+    '/<p[^>]*>[\s\S]*?(?:음식이\s*맛있어요|고기\s*질이\s*좋아요|친절해요|인테리어가\s*멋져요)\s*\(\d+\s*건\)[\s\S]*?<\/p>/iu',
+    '/<div[^>]*>[\s\S]*?(?:음식이\s*맛있어요|고기\s*질이\s*좋아요|친절해요|인테리어가\s*멋져요)\s*\(\d+\s*건\)[\s\S]*?<\/div>/iu',
+    '/<ul[^>]*>[\s\S]*?(?:음식이\s*맛있어요|고기\s*질이\s*좋아요|친절해요|인테리어가\s*멋져요)\s*\(\d+\s*건\)[\s\S]*?<\/ul>/iu',
+    '/<ol[^>]*>[\s\S]*?(?:음식이\s*맛있어요|고기\s*질이\s*좋아요|친절해요|인테리어가\s*멋져요)\s*\(\d+\s*건\)[\s\S]*?<\/ol>/iu',
+    '/<li[^>]*>[\s\S]*?(?:음식이\s*맛있어요|고기\s*질이\s*좋아요|친절해요|인테리어가\s*멋져요)\s*\(\d+\s*건\)[\s\S]*?<\/li>/iu',
+  );
+
+  foreach ($block_patterns as $pattern) {
+    $html = preg_replace($pattern, '', $html);
+  }
+
+  return $html;
+}
+
 function cleanup_existing_post_language($html) {
   $html = (string) $html;
 
@@ -134,6 +166,13 @@ function cleanup_existing_post_language($html) {
     '/직접 방문(?:한|하여|해서)?\s*/u' => '',
     '/리뷰\s*기반\s*추정치(?:입니다)?/u' => '',
     '/리뷰상/u' => '',
+    '/많은\s*방문자들이\s*공통적으로\s*언급하듯,?\s*/u' => '',
+    '/방문자들이\s*공통적으로\s*언급하듯,?\s*/u' => '',
+    '/많은\s*리뷰(?:에서|를\s*보면)\s*언급하듯,?\s*/u' => '',
+    '/리뷰(?:에서|를\s*보면)\s*언급하듯,?\s*/u' => '',
+    '/많은\s*리뷰(?:에서|를\s*보면)\s*반복적으로\s*언급되듯,?\s*/u' => '',
+    '/리뷰(?:에서|를\s*보면)\s*반복적으로\s*언급되듯,?\s*/u' => '',
+    '/후기(?:에서|를\s*보면)\s*자주\s*언급되듯,?\s*/u' => '',
     '/추정/u' => '',
     '/현장 기준,\s*/u' => '',
     '/[（(]\s*현장\s*기준\s*[)）]/u' => '',
@@ -145,6 +184,10 @@ function cleanup_existing_post_language($html) {
     '/방문 전\s*매장에\s*문의하시는\s*것이\s*좋습니다\./u' => '',
     '/가능한\s*것으로\s*보이나[^<.]*\./u' => '',
     '/정보\s*부족\s*-\s*문의\s*필요/u' => '',
+    '/[（(]\s*정확한\s*가격(?:\s*정보)?(?:는)?\s*방문\s*(?:문의|확인)\s*필요\s*[)）]/u' => '',
+    '/[（(]\s*정확한\s*마감\s*시간(?:은)?\s*확인\s*필요\s*[)）]/u' => '',
+    '/[（(]\s*발렛파킹\s*가능\s*여부\s*별도\s*확인\s*필요\s*[)）]/u' => '',
+    '/[（(][^()（）]{0,120}(?:확인\s*필요|문의\s*필요)[^()（）]{0,120}[)）]/u' => '',
     '/\s*\(단,\s*일부\s*제한이\s*있을\s*수\s*있으니\s*방문\s*전\s*확인\s*필요\)\s*/u' => '',
     '/창밖\s*뷰가\s*좋은\s*좌석을\s*미리\s*요청하는\s*것도\s*좋은\s*팁입니다\./u' => '',
     '/피해야\s*할\s*메뉴를\s*특정하기는\s*어렵지만[^<.]*\./u' => '',
@@ -161,9 +204,20 @@ function cleanup_existing_post_language($html) {
     $html = preg_replace($pattern, $replacement, $html);
   }
 
+  $line_segment_patterns = array(
+    '/<strong>\s*(?:전화번호|전화|주차|예약)\s*:\s*<\/strong>.*?(<br\s*\/?>|<\/p>)/iu' => '$1',
+    '/<strong>\s*영업시간\s*:\s*<\/strong>.*?(?:확인 필요|문의 필요).*?(<br\s*\/?>|<\/p>)/iu' => '$1',
+  );
+
+  foreach ($line_segment_patterns as $pattern => $replacement) {
+    $html = preg_replace($pattern, $replacement, $html);
+  }
+
   $block_removals = array(
     '/<p[^>]*>[\s\S]*?가능할\s*수\s*있(?:습니다|어요)[\s\S]*?<\/p>/iu',
     '/<li[^>]*>[\s\S]*?(?:확인 필요|문의 필요|방문 전 확인|방문 전 문의|직접 확인 필요|가게 직접 확인 필요)[\s\S]*?<\/li>/iu',
+    '/<p[^>]*>\s*<strong>\s*(?:전화번호|전화|주차|예약)\s*:\s*<\/strong>[\s\S]*?<\/p>/iu',
+    '/<p[^>]*>\s*<strong>\s*영업시간\s*:\s*<\/strong>[\s\S]*?(?:확인 필요|문의 필요)[\s\S]*?<\/p>/iu',
   );
 
   foreach ($block_removals as $pattern) {
@@ -172,6 +226,7 @@ function cleanup_existing_post_language($html) {
 
   $html = cleanup_uncertain_place_info_rows($html);
   $html = cleanup_uncertain_faq_blocks($html);
+  $html = cleanup_review_analysis_sections($html);
 
   return cleanup_empty_html_blocks($html);
 }
@@ -241,7 +296,7 @@ function extract_faq_items($html) {
       if (preg_match('/(확인 필요|직접 확인|가게 직접 확인|문의 필요|방문 전 확인|문의하시는 것이 좋습니다|가능한 것으로 보이나|있을 수 있습니다|정보 부족)/u', $a)) {
         continue;
       }
-      if ((mb_strpos($q, '?') !== false || mb_strpos($q, '？') !== false) && mb_strlen($a) > 20) {
+      if ((mb_strpos($q, '?') !== false || mb_strpos($q, '？') !== false) && mb_strlen($q) < 140 && mb_strlen($a) > 20) {
         $faq_items[] = array(
           '@type' => 'Question',
           'name' => $q,
@@ -251,14 +306,14 @@ function extract_faq_items($html) {
     }
   }
 
-  if (empty($faq_items) && preg_match_all('/<p[^>]*>\s*<strong>(.*?\?.*?)<\/strong>\s*<\/p>\s*<p[^>]*>(.*?)<\/p>/si', $html, $matches, PREG_SET_ORDER)) {
+  if (empty($faq_items) && preg_match_all('/<p[^>]*>\s*<strong>\s*(Q[\d\s:.-]*.*?\?.*?)<\/strong>\s*<\/p>\s*<p[^>]*>(.*?)<\/p>/si', $html, $matches, PREG_SET_ORDER)) {
     foreach ($matches as $m) {
       $q = wp_strip_all_tags($m[1]);
       $a = wp_strip_all_tags($m[2]);
       if (preg_match('/(확인 필요|직접 확인|가게 직접 확인|문의 필요|방문 전 확인|문의하시는 것이 좋습니다|가능한 것으로 보이나|있을 수 있습니다|정보 부족)/u', $a)) {
         continue;
       }
-      if (mb_strlen($a) > 20) {
+      if (mb_strlen($q) < 140 && mb_strlen($a) > 20) {
         $faq_items[] = array(
           '@type' => 'Question',
           'name' => $q,
