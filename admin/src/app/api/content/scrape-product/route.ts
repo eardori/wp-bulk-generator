@@ -356,9 +356,10 @@ async function scrapeNaverPlaceDirect(url: string): Promise<ScrapedProduct> {
     throw new Error("네이버 플레이스 ID를 찾을 수 없습니다.");
   }
 
-  const [reviews, summary] = await Promise.all([
+  const [reviews, summary, bridgeProduct] = await Promise.all([
     fetchNaverPlaceReviews(placeId, url),
     fetchNaverPlaceSummary(placeId, url).catch(() => null),
+    fetchNaverPlaceBridgeMetadata(url).catch(() => null),
   ]);
   if (reviews.length === 0) {
     throw new Error("네이버 플레이스 리뷰를 찾을 수 없습니다.");
@@ -393,9 +394,15 @@ async function scrapeNaverPlaceDirect(url: string): Promise<ScrapedProduct> {
   if (summary?.address?.formattedAddress?.trim()) {
     specs["지역"] = summary.address.formattedAddress.trim();
   }
+  if (bridgeProduct?.specs?.phone?.trim()) {
+    specs["전화"] = bridgeProduct.specs.phone.trim();
+  }
   if (businessHours) {
     specs["영업시간"] = businessHours;
     specs.hours = businessHours;
+  } else if (bridgeProduct?.specs?.hours?.trim()) {
+    specs["영업시간"] = bridgeProduct.specs.hours.trim();
+    specs.hours = bridgeProduct.specs.hours.trim();
   }
   if (category) {
     specs["업종"] = category;
@@ -412,6 +419,15 @@ async function scrapeNaverPlaceDirect(url: string): Promise<ScrapedProduct> {
   }
   if (typeof summary?.blogReviews?.total === "number" && summary.blogReviews.total > 0) {
     specs["블로그리뷰"] = `${summary.blogReviews.total}개`;
+  }
+  if (bridgeProduct?.specs?.facilities?.trim()) {
+    specs["편의시설"] = bridgeProduct.specs.facilities.trim();
+  }
+  if (bridgeProduct?.specs?.directions?.trim()) {
+    specs["찾아가는길"] = bridgeProduct.specs.directions.trim();
+  }
+  if (bridgeProduct?.specs?.tags?.trim() && !specs["키워드"]) {
+    specs["키워드"] = bridgeProduct.specs.tags.trim();
   }
   if (
     typeof summary?.coordinate?.latitude === "number" &&
@@ -495,6 +511,21 @@ async function fetchNaverPlaceSummary(
   };
 
   return payload?.data?.placeDetail || null;
+}
+
+async function fetchNaverPlaceBridgeMetadata(url: string): Promise<ScrapedProduct | null> {
+  const res = await bridgeFetch("/scrape/naver-place", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+    signal: AbortSignal.timeout(5000),
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const payload = await parseBridgeJsonResponse(res) as { product?: ScrapedProduct };
+  return payload?.product || null;
 }
 
 async function fetchNaverPlaceReviews(
