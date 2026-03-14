@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import type { FastifyInstance } from "fastify";
 import { setupSSE } from "../utils/sse.js";
 import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
+import { seedDashboardSiteCaches } from "../lib/dashboard-cache.js";
 
 const CREDS_PATH =
   process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
@@ -231,6 +232,7 @@ export async function deployRoutes(app: FastifyInstance) {
       let completed = 0;
       let successCount = 0;
       let failureCount = 0;
+      const successfulSlugs = new Set<string>();
       const failedSites: DeployFailure[] = conflicts.map((slug) => ({
         slug,
         reason: conflictReasons.get(slug) || "이미 존재하는 사이트",
@@ -304,6 +306,7 @@ export async function deployRoutes(app: FastifyInstance) {
             if (marker.type === "site_success") {
               completed += 1;
               successCount += 1;
+              successfulSlugs.add(marker.slug);
               send({
                 type: "progress",
                 progress: completed,
@@ -372,6 +375,22 @@ export async function deployRoutes(app: FastifyInstance) {
       const credentialsSummary = summarizeDeployCredentials(credentials, deployableConfigs);
 
       if (credentialsSummary) {
+        const cacheSeedEntries = credentialsSummary.sites
+          .filter((site) => successfulSlugs.size === 0 || successfulSlugs.has(site.slug))
+          .map((site) => ({
+            slug: site.slug,
+            entry: {
+              posts: [],
+              totalCount: 0,
+              cachedAt: Date.now(),
+              error: false,
+            },
+          }));
+
+        if (cacheSeedEntries.length > 0) {
+          await seedDashboardSiteCaches(cacheSeedEntries);
+        }
+
         send({ type: "credentials", credentials: credentialsSummary });
       }
 

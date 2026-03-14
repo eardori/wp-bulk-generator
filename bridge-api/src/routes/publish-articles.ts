@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { setupSSE } from "../utils/sse.js";
 import { sanitizeGeneratedArticle } from "../lib/article-sanitizer.js";
+import { updateDashboardSiteCache } from "../lib/dashboard-cache.js";
 import type { ReviewImage } from "../types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -64,6 +65,16 @@ type SendFn = (data: Record<string, unknown>) => void;
 
 const REMOTE_FETCH_TIMEOUT_MS = Number(process.env.WP_REMOTE_FETCH_TIMEOUT_MS || 20000);
 const WP_SITES_ROOT = process.env.WP_SITES_ROOT || "/var/www";
+
+function buildDashboardPostEntry(article: GeneratedArticle, result: PublishResult) {
+  return {
+    id: result.postId,
+    title: { rendered: article.title },
+    link: result.postUrl,
+    date: new Date().toISOString(),
+    status: "publish",
+  };
+}
 
 // ── Image helpers ────────────────────────────────────────────────────────────
 
@@ -797,6 +808,24 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
 
         try {
           const result = await publishToWordPress(article, site, send);
+          const publishedPost = buildDashboardPostEntry(article, result);
+          await updateDashboardSiteCache(article.siteSlug, (current) => {
+            const existingPosts = current.posts.filter(
+              (post) => post.id !== publishedPost.id && post.link !== publishedPost.link
+            );
+            const nextPosts = [publishedPost, ...existingPosts].slice(0, 15);
+            const nextTotalCount =
+              current.posts.some((post) => post.id === publishedPost.id || post.link === publishedPost.link)
+                ? current.totalCount
+                : current.totalCount + 1;
+
+            return {
+              posts: nextPosts,
+              totalCount: Math.max(nextTotalCount, nextPosts.length),
+              cachedAt: Date.now(),
+              error: false,
+            };
+          });
           send({
             type: "published",
             articleId: article.id,

@@ -2,6 +2,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname } from "path";
 import type { FastifyInstance } from "fastify";
 import { isExcludedSiteRecord } from "../lib/excluded-sites.js";
+import { removeDashboardSiteCaches } from "../lib/dashboard-cache.js";
 
 const CREDS_PATH =
   process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
@@ -141,10 +142,20 @@ export async function credentialsRoutes(app: FastifyInstance) {
     let remainingCredentials = 0;
     let remainingConfigs = 0;
     let remainingGroups = 0;
+    const deletedSlugs = new Set<string>();
 
     for (const path of uniquePaths(CREDS_PATH, CREDENTIAL_MIRROR_PATHS)) {
       const credentials = normalizeRecords(tryReadJson(path), "sites");
+      const removedCredentials = credentials.filter((item) => shouldDelete(item));
       const nextCredentials = credentials.filter((item) => !shouldDelete(item));
+
+      for (const item of removedCredentials) {
+        const slug = normalizeText(item.slug ?? item.site_slug);
+        if (slug) {
+          deletedSlugs.add(slug);
+        }
+      }
+
       remainingCredentials = Math.max(remainingCredentials, nextCredentials.length);
       deletedCredentials = Math.max(
         deletedCredentials,
@@ -158,7 +169,16 @@ export async function credentialsRoutes(app: FastifyInstance) {
 
     for (const path of uniquePaths(CONFIG_PATH, CONFIG_MIRROR_PATHS)) {
       const configs = normalizeRecords(tryReadJson(path), "configs");
+      const removedConfigs = configs.filter((item) => shouldDelete(item));
       const nextConfigs = configs.filter((item) => !shouldDelete(item));
+
+      for (const item of removedConfigs) {
+        const slug = normalizeText(item.slug ?? item.site_slug);
+        if (slug) {
+          deletedSlugs.add(slug);
+        }
+      }
+
       remainingConfigs = Math.max(remainingConfigs, nextConfigs.length);
       deletedConfigs = Math.max(
         deletedConfigs,
@@ -192,6 +212,8 @@ export async function credentialsRoutes(app: FastifyInstance) {
         writeJson(path, nextGroups);
       }
     }
+
+    await removeDashboardSiteCaches(Array.from(deletedSlugs));
 
     return {
       success: true,

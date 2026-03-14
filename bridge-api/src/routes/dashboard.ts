@@ -5,6 +5,12 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { setupSSE } from "../utils/sse.js";
 import { fetchCredentials, fetchGroups } from "../lib/ec2-client.js";
+import {
+  readDashboardCache,
+  setDashboardSiteCache,
+  type DashboardCacheEntry,
+  type DashboardPost,
+} from "../lib/dashboard-cache.js";
 
 type SiteCredential = {
   slug: string;
@@ -17,19 +23,7 @@ type SiteCredential = {
   site_dir?: string;
 };
 
-type WPPost = {
-  id: number;
-  title: { rendered: string };
-  link: string;
-  date: string;
-  status: string;
-};
-
-type CacheEntry = {
-  posts: WPPost[];
-  totalCount: number;
-  cachedAt: number;
-};
+type WPPost = DashboardPost;
 
 type SiteGroup = {
   id: string;
@@ -38,9 +32,6 @@ type SiteGroup = {
   createdAt: string;
 };
 
-// 인메모리 캐시 (TTL 5분)
-const CACHE_TTL = 5 * 60 * 1000;
-const postCache = new Map<string, CacheEntry>();
 const WP_SITES_ROOT = process.env.WP_SITES_ROOT || "/var/www";
 
 type RemotePostsResult = {
@@ -93,7 +84,7 @@ async function fetchRemoteWPPostCount(site: SiteCredential): Promise<RemoteCount
   finally { clearTimeout(timeout); }
 }
 
-function fetchLocalSiteData(site: SiteCredential, perPage = 15): CacheEntry {
+function fetchLocalSiteData(site: SiteCredential, perPage = 15): DashboardCacheEntry {
   const siteDir = getLocalSiteDir(site);
   const tempDir = mkdtempSync(join(tmpdir(), "wpbulk-dashboard-"));
   const scriptPath = join(tempDir, "dashboard-local.php");
@@ -136,7 +127,7 @@ echo wp_json_encode([
       { encoding: "utf8", timeout: 45000 }
     ).trim();
 
-    const parsed = JSON.parse(output) as Partial<CacheEntry>;
+    const parsed = JSON.parse(output) as Partial<DashboardCacheEntry>;
 
     return {
       posts: Array.isArray(parsed.posts) ? parsed.posts as WPPost[] : [],
@@ -148,12 +139,7 @@ echo wp_json_encode([
   }
 }
 
-async function fetchSiteData(site: SiteCredential): Promise<CacheEntry> {
-  const cached = postCache.get(site.slug);
-  if (cached && Date.now() - cached.cachedAt < CACHE_TTL) {
-    return cached;
-  }
-
+async function fetchSiteData(site: SiteCredential): Promise<DashboardCacheEntry> {
   const [postsResult, countResult] = await Promise.all([
     fetchRemoteWPPosts(site, 15),
     fetchRemoteWPPostCount(site),
@@ -164,18 +150,14 @@ async function fetchSiteData(site: SiteCredential): Promise<CacheEntry> {
       throw new Error(`WordPress unavailable for ${site.slug}`);
     }
 
-    const localEntry = fetchLocalSiteData(site, 15);
-    postCache.set(site.slug, localEntry);
-    return localEntry;
+    return fetchLocalSiteData(site, 15);
   }
 
-  const entry: CacheEntry = {
+  return {
     posts: postsResult.posts,
     totalCount: countResult.totalCount,
     cachedAt: Date.now(),
   };
-  postCache.set(site.slug, entry);
-  return entry;
 }
 
 function normalizeGroups(input: unknown): SiteGroup[] {
@@ -206,19 +188,57 @@ export async function dashboardRoutes(app: FastifyInstance) {
       const sitesRaw = await fetchCredentials();
       const sites = normalizeSites(sitesRaw);
       const groups = normalizeGroups(await fetchGroups());
+      const cache = readDashboardCache();
+      const missingSites: SiteCredential[] = [];
 
       send({ type: "meta", sites, groups });
 
-      const BATCH_SIZE = 3;
-      for (let i = 0; i < sites.length; i += BATCH_SIZE) {
-        const batch = sites.slice(i, i + BATCH_SIZE);
+      for (const site of sites) {
+        const cached = cache.sites[site.slug];
+
+        if (!cached) {
+          missingSites.push(site);
+          continue;
+        }
+
+        send({
+          type: "posts",
+          slug: site.slug,
+          posts: cached.posts,
+          totalCount: cached.totalCount,
+          ...(cached.error ? { error: true } : {}),
+        });
+      }
+
+      const BATCH_SIZE = 2;
+      for (let i = 0; i < missingSites.length; i += BATCH_SIZE) {
+        const batch = missingSites.slice(i, i + BATCH_SIZE);
         await Promise.all(
           batch.map(async (site) => {
             try {
-              const { posts, totalCount } = await fetchSiteData(site);
-              send({ type: "posts", slug: site.slug, posts, totalCount });
+              const entry = await fetchSiteData(site);
+              await setDashboardSiteCache(site.slug, entry);
+              send({
+                type: "posts",
+                slug: site.slug,
+                posts: entry.posts,
+                totalCount: entry.totalCount,
+              });
             } catch {
-              send({ type: "posts", slug: site.slug, posts: [], totalCount: 0, error: true });
+              const failedEntry: DashboardCacheEntry = {
+                posts: [],
+                totalCount: 0,
+                cachedAt: Date.now(),
+                error: true,
+              };
+              await setDashboardSiteCache(site.slug, failedEntry);
+              send({
+                type: "posts",
+                slug: site.slug,
+                posts: [],
+                totalCount: 0,
+                error: true,
+              });
             }
           })
         );
