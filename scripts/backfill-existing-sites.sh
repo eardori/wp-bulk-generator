@@ -15,6 +15,7 @@ WP_CLI_TIMEOUT="${WP_CLI_TIMEOUT:-20}"
 WP_LIGHT_MODE="${WP_LIGHT_MODE:-1}"
 REMOTE_VALIDATE_TIMEOUT="${REMOTE_VALIDATE_TIMEOUT:-12}"
 TARGET_SLUGS_RAW=""
+INDEXNOW_KEY_FILE="${INDEXNOW_KEY_FILE:-/root/.wp-bulk-indexnow-key}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -366,6 +367,71 @@ LLMS
   chown www-data:www-data "$site_dir/llms.txt"
 }
 
+ensure_indexnow_key() {
+  if [ -n "${INDEXNOW_KEY:-}" ]; then
+    return 0
+  fi
+
+  if [ -f "$INDEXNOW_KEY_FILE" ]; then
+    INDEXNOW_KEY="$(tr -d '\r\n' < "$INDEXNOW_KEY_FILE")"
+    [ -n "$INDEXNOW_KEY" ] && return 0
+  fi
+
+  INDEXNOW_KEY="$(openssl rand -hex 16)"
+  printf '%s' "$INDEXNOW_KEY" > "$INDEXNOW_KEY_FILE"
+  chmod 600 "$INDEXNOW_KEY_FILE" 2>/dev/null || true
+}
+
+indexnow_key_url_for_domain() {
+  local domain="$1"
+  if [ -n "${INDEXNOW_KEY_LOCATION:-}" ]; then
+    printf '%s' "$INDEXNOW_KEY_LOCATION"
+  else
+    printf '%s/%s.txt' "$(site_url_for_domain "$domain")" "$INDEXNOW_KEY"
+  fi
+}
+
+write_indexnow_key_file() {
+  local domain="$1"
+  local site_dir="$2"
+
+  ensure_indexnow_key
+  [ -n "${INDEXNOW_KEY:-}" ] || return 0
+
+  printf '%s' "$INDEXNOW_KEY" > "$site_dir/${INDEXNOW_KEY}.txt"
+  chown www-data:www-data "$site_dir/${INDEXNOW_KEY}.txt" 2>/dev/null || true
+}
+
+ensure_seo_site_options() {
+  local domain="$1"
+  local site_dir="$2"
+  local indexnow_url=""
+
+  ensure_indexnow_key
+  write_indexnow_key_file "$domain" "$site_dir"
+
+  if [ -n "${INDEXNOW_KEY:-}" ]; then
+    indexnow_url="$(indexnow_key_url_for_domain "$domain")"
+    wp_try option update ai_indexnow_key "$INDEXNOW_KEY" --path="$site_dir" --allow-root --quiet 2>/dev/null || true
+    wp_try option update ai_indexnow_key_url "$indexnow_url" --path="$site_dir" --allow-root --quiet 2>/dev/null || true
+  else
+    wp_try option delete ai_indexnow_key --path="$site_dir" --allow-root --quiet 2>/dev/null || true
+    wp_try option delete ai_indexnow_key_url --path="$site_dir" --allow-root --quiet 2>/dev/null || true
+  fi
+
+  if [ -n "${GOOGLE_SITE_VERIFICATION:-}" ]; then
+    wp_try option update ai_google_site_verification "$GOOGLE_SITE_VERIFICATION" --path="$site_dir" --allow-root --quiet 2>/dev/null || true
+  else
+    wp_try option delete ai_google_site_verification --path="$site_dir" --allow-root --quiet 2>/dev/null || true
+  fi
+
+  if [ -n "${BING_SITE_VERIFICATION:-}" ]; then
+    wp_try option update ai_bing_site_verification "$BING_SITE_VERIFICATION" --path="$site_dir" --allow-root --quiet 2>/dev/null || true
+  else
+    wp_try option delete ai_bing_site_verification --path="$site_dir" --allow-root --quiet 2>/dev/null || true
+  fi
+}
+
 write_nginx_config() {
   local slug="$1"
   local domain="$2"
@@ -628,6 +694,18 @@ add_action('wp_head', function() {
 }, 1);
 
 add_action('wp_head', function() {
+    $google = trim((string) get_option('ai_google_site_verification', ''));
+    if ($google !== '') {
+        echo '<meta name="google-site-verification" content="' . esc_attr($google) . '" />' . "\n";
+    }
+
+    $bing = trim((string) get_option('ai_bing_site_verification', ''));
+    if ($bing !== '') {
+        echo '<meta name="msvalidate.01" content="' . esc_attr($bing) . '" />' . "\n";
+    }
+}, 1);
+
+add_action('wp_head', function() {
     if (!is_singular('post')) {
         return;
     }
@@ -707,6 +785,46 @@ add_action('wp_head', function() {
     }
     echo '<script type="application/ld+json">' . wp_json_encode(['@context' => 'https://schema.org', '@type' => 'BreadcrumbList', 'itemListElement' => $items], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>' . "\n";
 }, 2);
+
+function ai_submit_indexnow_url($url) {
+    $key = trim((string) get_option('ai_indexnow_key', ''));
+    $key_url = trim((string) get_option('ai_indexnow_key_url', ''));
+    $host = wp_parse_url(home_url('/'), PHP_URL_HOST);
+
+    if ($key === '' || $key_url === '' || !$host || !$url) {
+        return;
+    }
+
+    wp_remote_post('https://api.indexnow.org/indexnow', [
+        'timeout' => 5,
+        'headers' => ['Content-Type' => 'application/json; charset=utf-8'],
+        'body' => wp_json_encode([
+            'host' => $host,
+            'key' => $key,
+            'keyLocation' => $key_url,
+            'urlList' => [$url],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+}
+
+add_action('transition_post_status', function($new_status, $old_status, $post) {
+    if (!$post instanceof WP_Post || $post->post_type !== 'post') {
+        return;
+    }
+
+    if (wp_is_post_revision($post)) {
+        return;
+    }
+
+    if ($new_status !== 'publish') {
+        return;
+    }
+
+    $permalink = get_permalink($post);
+    if ($permalink) {
+        ai_submit_indexnow_url($permalink);
+    }
+}, 10, 3);
 SEOPHP
 }
 
@@ -743,6 +861,7 @@ finalize_site_setup() {
 
   write_robots_txt "$domain" "$site_dir"
   chown www-data:www-data "$site_dir/robots.txt"
+  ensure_seo_site_options "$domain" "$site_dir"
 
   ensure_enable_app_passwords_mu_plugin "$site_dir"
   ensure_seo_mu_plugin "$site_dir"

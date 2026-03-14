@@ -47,6 +47,16 @@ function normalize_html_signature($html) {
   return trim((string) preg_replace('/\s+/', ' ', $html));
 }
 
+function strip_review_reference_markers($html) {
+  $patterns = array(
+    '/\[(?:리뷰|review)\s*#\s*\d+\]/iu',
+    '/\((?:리뷰|review)\s*#\s*\d+\)/iu',
+    '/(?:^|\s)(?:리뷰|review)\s*#\s*\d+(?=[\s,.;:!?)\]]|$)/iu',
+  );
+
+  return preg_replace($patterns, ' ', $html);
+}
+
 function improve_image_alts($html, $title) {
   $counter = 0;
 
@@ -133,6 +143,150 @@ function extract_faq_items($html) {
   return array_slice($faq_items, 0, 10);
 }
 
+function collect_content_lines($html) {
+  $lines = array();
+  if (preg_match_all('/<(?:li|p|dt|dd|figcaption)[^>]*>(.*?)<\/(?:li|p|dt|dd|figcaption)>/si', $html, $matches)) {
+    foreach ($matches[1] as $raw) {
+      $text = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($raw)));
+      if ($text !== '') {
+        $lines[$text] = $text;
+      }
+    }
+  }
+
+  return array_values($lines);
+}
+
+function extract_labeled_value($lines, $labels) {
+  foreach ($lines as $line) {
+    foreach ($labels as $label) {
+      $pattern = '/(?:^|\s)' . preg_quote($label, '/') . '\s*[:：-]?\s*(.+)$/iu';
+      if (preg_match($pattern, $line, $match)) {
+        $value = trim(preg_replace('/\s+/', ' ', (string) ($match[1] ?? '')));
+        if ($value !== '') {
+          return $value;
+        }
+      }
+    }
+  }
+
+  return '';
+}
+
+function infer_cuisine($text) {
+  $map = array(
+    '/(한식|갈비|국밥|삼겹살|불고기|백반)/iu' => 'Korean',
+    '/(일식|스시|초밥|라멘|우동|오마카세)/iu' => 'Japanese',
+    '/(중식|짜장|짬뽕|마라|딤섬)/iu' => 'Chinese',
+    '/(양식|파스타|스테이크|리조또|브런치)/iu' => 'Western',
+    '/(카페|커피|디저트|베이커리|케이크)/iu' => 'Cafe',
+    '/(치킨|버거|피자|샌드위치)/iu' => 'Fast Food',
+    '/(와인|바|주점|칵테일)/iu' => 'Bar',
+  );
+
+  foreach ($map as $pattern => $value) {
+    if (preg_match($pattern, $text)) {
+      return $value;
+    }
+  }
+
+  return '';
+}
+
+function build_business_schema($post, $content, $title, $excerpt) {
+  $plain_text = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($content)));
+  $lines = collect_content_lines($content);
+  $address = extract_labeled_value($lines, array('주소', '위치', '지번주소', '도로명주소'));
+
+  if ($address === '' && preg_match('/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^\n,]{6,120})/u', $plain_text, $address_match)) {
+    $address = trim($address_match[1]);
+  }
+
+  $telephone = extract_labeled_value($lines, array('전화', '전화번호', '문의'));
+  if ($telephone !== '' && preg_match('/(0\d{1,2}-\d{3,4}-\d{4})/', $telephone, $tel_match)) {
+    $telephone = $tel_match[1];
+  } elseif (preg_match('/(0\d{1,2}-\d{3,4}-\d{4})/', $plain_text, $tel_match)) {
+    $telephone = $tel_match[1];
+  } else {
+    $telephone = '';
+  }
+
+  $has_place_signals = $address !== '' || $telephone !== '' || preg_match('/(주소|위치|전화|영업시간|찾아가는 길|편의시설|예약)/iu', $plain_text);
+  $looks_like_restaurant = preg_match('/(맛집|식당|레스토랑|restaurant|카페|coffee|브런치|갈비|고기|한식|일식|중식|양식|베이커리|디저트|주점|와인|bar|펍|술집)/iu', $title . ' ' . $plain_text);
+
+  if (!$has_place_signals && !$looks_like_restaurant) {
+    return null;
+  }
+
+  $business_name = trim(preg_replace('/\s*(리뷰|후기|방문기|방문 후기|추천|가이드|총정리|솔직 후기|review).*$/iu', '', preg_replace('/\s*[-:|].*$/u', '', $title)));
+  if ($business_name === '') {
+    $business_name = $title;
+  }
+
+  $image = get_the_post_thumbnail_url($post, 'large');
+  if (!$image && preg_match('/<img[^>]*src=["\']([^"\']+)["\']/i', $content, $image_match)) {
+    $image = $image_match[1];
+  }
+
+  $schema = array(
+    '@context' => 'https://schema.org',
+    '@type' => $looks_like_restaurant ? 'Restaurant' : 'LocalBusiness',
+    'name' => $business_name,
+    'description' => mb_substr($excerpt !== '' ? $excerpt : $plain_text, 0, 200),
+    'url' => get_permalink($post),
+  );
+
+  if ($image) {
+    $schema['image'] = $image;
+  }
+
+  if ($telephone !== '') {
+    $schema['telephone'] = $telephone;
+  }
+
+  if ($address !== '') {
+    $schema['address'] = array(
+      '@type' => 'PostalAddress',
+      'streetAddress' => $address,
+      'addressCountry' => 'KR',
+    );
+  }
+
+  if (preg_match('/(\d(?:\.\d)?)\s*(?:점|\/\s*5)/u', $plain_text, $rating_match)) {
+    $aggregate = array(
+      '@type' => 'AggregateRating',
+      'ratingValue' => $rating_match[1],
+    );
+    if (preg_match('/(?:리뷰|후기)\s*(\d{1,4})\s*개/u', $plain_text, $review_count_match)) {
+      $aggregate['reviewCount'] = (int) $review_count_match[1];
+    }
+    $schema['aggregateRating'] = $aggregate;
+  }
+
+  if (preg_match_all('/(\d{1,3}(?:,\d{3})*)\s*원/u', $plain_text, $price_matches)) {
+    $prices = array();
+    foreach ($price_matches[1] as $raw_price) {
+      $price = (int) str_replace(',', '', $raw_price);
+      if ($price > 0 && $price < 10000000) {
+        $prices[] = $price;
+      }
+    }
+    if (!empty($prices)) {
+      sort($prices);
+      $schema['priceRange'] = $prices[0] === end($prices)
+        ? 'KRW ' . number_format($prices[0])
+        : 'KRW ' . number_format($prices[0]) . '-' . number_format(end($prices));
+    }
+  }
+
+  $cuisine = infer_cuisine($title . ' ' . $plain_text);
+  if ($looks_like_restaurant && $cuisine !== '') {
+    $schema['servesCuisine'] = $cuisine;
+  }
+
+  return $schema;
+}
+
 function build_schema_html($post, $content, $title, $excerpt, $persona_name, $site_title, $persona_expertise, $persona_concern, $persona_bio) {
   $author = array(
     '@type' => 'Person',
@@ -171,6 +325,11 @@ function build_schema_html($post, $content, $title, $excerpt, $persona_name, $si
     $schema_html .= "\n" . '<script type="application/ld+json">' . wp_json_encode($faq_schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>';
   }
 
+  $business_schema = build_business_schema($post, $content, $title, $excerpt);
+  if (!empty($business_schema)) {
+    $schema_html .= "\n" . '<script type="application/ld+json">' . wp_json_encode($business_schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>';
+  }
+
   return array($schema_html, count($faq_items));
 }
 
@@ -189,7 +348,7 @@ foreach ($posts as $post) {
   $short = mb_substr($title, 0, 35);
   $original_content = (string) $post->post_content;
   $content_without_schemas = strip_json_ld_scripts($original_content);
-  $content = improve_image_alts($content_without_schemas, $title);
+  $content = improve_image_alts(strip_review_reference_markers($content_without_schemas), $title);
 
   $excerpt = wp_strip_all_tags($post->post_excerpt ?: wp_trim_words($content, 30, ''));
   $excerpt = mb_substr($excerpt, 0, 160);

@@ -6,6 +6,7 @@ import { join } from "path";
 import { setupSSE } from "../utils/sse.js";
 import { sanitizeGeneratedArticle } from "../lib/article-sanitizer.js";
 import { updateDashboardSiteCache } from "../lib/dashboard-cache.js";
+import { buildBusinessSchemaFromHtml, stripReviewReferenceMarkers } from "../lib/business-schema.js";
 import type { ReviewImage } from "../types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -255,7 +256,9 @@ async function probeRemoteWordPress(site: SiteCredential): Promise<{
 }
 
 function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replacedHtml: string): string {
-  let finalHtml = replacedHtml;
+  const canonicalUrl = `${site.url.replace(/\/$/, "")}/${article.slug}/`;
+  const cleanedHtml = stripReviewReferenceMarkers(replacedHtml);
+  let finalHtml = cleanedHtml;
 
   if (article.faqSchema && article.faqSchema.length > 0) {
     const faqJsonLd = {
@@ -295,14 +298,26 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
       "@type": "SpeakableSpecification",
       "cssSelector": [".summary-box", "h2"],
     },
+    "url": canonicalUrl,
     ...(article.tags?.length > 0 ? { "keywords": article.tags.join(", ") } : {}),
   };
   finalHtml += `\n<script type="application/ld+json">${JSON.stringify(articleJsonLd)}</script>`;
 
-  // Product + Review 스키마 (GEO: 상품 리뷰 글에 구조화된 평점/가격 데이터 제공)
-  const productReviewJsonLd = buildProductReviewSchema(article, site);
-  if (productReviewJsonLd) {
-    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(productReviewJsonLd)}</script>`;
+  const businessJsonLd = buildBusinessSchemaFromHtml({
+    title: article.title,
+    excerpt: article.metaDescription || article.excerpt,
+    contentHtml: cleanedHtml,
+    url: canonicalUrl,
+    sourceName: article.sourceTitle,
+  });
+
+  if (businessJsonLd) {
+    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(businessJsonLd)}</script>`;
+  } else {
+    const productReviewJsonLd = buildProductReviewSchema(article, site);
+    if (productReviewJsonLd) {
+      finalHtml += `\n<script type="application/ld+json">${JSON.stringify(productReviewJsonLd)}</script>`;
+    }
   }
 
   return finalHtml;

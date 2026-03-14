@@ -2,6 +2,7 @@ import * as cheerio from "cheerio";
 import type { FastifyInstance } from "fastify";
 import { setupSSE } from "../utils/sse.js";
 import { fetchCredentials } from "../lib/ec2-client.js";
+import { buildBusinessSchemaFromHtml, stripReviewReferenceMarkers } from "../lib/business-schema.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -160,10 +161,19 @@ function buildSchemaBlocks(
     schemas += `\n<script type="application/ld+json">${JSON.stringify(faqJsonLd)}</script>`;
   }
 
-  // Product + Review 스키마 (GEO: LLM이 상품 평점/가격 인용 가능)
-  const productSchema = buildProductSchemaFromPost(post, site, contentHtml);
-  if (productSchema) {
-    schemas += `\n<script type="application/ld+json">${JSON.stringify(productSchema)}</script>`;
+  const businessSchema = buildBusinessSchemaFromHtml({
+    title: plainTitle,
+    excerpt: plainExcerpt,
+    contentHtml,
+    url: post.link,
+  });
+  if (businessSchema) {
+    schemas += `\n<script type="application/ld+json">${JSON.stringify(businessSchema)}</script>`;
+  } else {
+    const productSchema = buildProductSchemaFromPost(post, site, contentHtml);
+    if (productSchema) {
+      schemas += `\n<script type="application/ld+json">${JSON.stringify(productSchema)}</script>`;
+    }
   }
 
   return schemas;
@@ -387,7 +397,7 @@ export async function seoOptimizeRoutes(app: FastifyInstance) {
 
         for (const post of allSitePosts) {
             const plainTitle = stripHtml(post.title.rendered);
-            const contentWithoutSchemas = stripJsonLdScripts(post.content.rendered);
+            const contentWithoutSchemas = stripReviewReferenceMarkers(stripJsonLdScripts(post.content.rendered));
 
             // 기존 related-posts div 제거 후 재생성
             const $ = cheerio.load(contentWithoutSchemas, null, false);
