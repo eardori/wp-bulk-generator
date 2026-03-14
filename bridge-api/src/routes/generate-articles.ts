@@ -91,6 +91,9 @@ const DEFAULT_PERSONA: SitePersona = {
   tone: "신뢰감 있는",
   bio: "실구매 리뷰와 공개 정보를 바탕으로 핵심만 정리해 전달합니다.",
 };
+const GEMINI_CONTENT_MODEL = process.env.GEMINI_CONTENT_MODEL || "gemini-3.1-flash-lite";
+const GEMINI_CONTENT_FALLBACK_MODEL =
+  process.env.GEMINI_CONTENT_FALLBACK_MODEL || "gemini-2.5-flash-lite";
 
 const REVIEW_TERM_STOPWORDS = new Set([
   "정말", "진짜", "그냥", "약간", "조금", "너무", "엄청", "가장", "많이", "매우",
@@ -140,6 +143,48 @@ function pickCoPrimeStep(reviewCount: number, preferredStep: number): number {
     step += 1;
   }
   return step;
+}
+
+async function requestGeminiContent(
+  apiKey: string,
+  prompt: string,
+  generationConfig: Record<string, unknown>
+) {
+  const models = Array.from(
+    new Set([GEMINI_CONTENT_MODEL, GEMINI_CONTENT_FALLBACK_MODEL].filter(Boolean))
+  );
+
+  let lastError: Error | null = null;
+
+  for (const model of models) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig,
+        }),
+      }
+    );
+
+    if (res.ok) {
+      return res.json();
+    }
+
+    const err = await res.text();
+    lastError = new Error(`Gemini API 오류 (${res.status}, model=${model}): ${err.slice(0, 200)}`);
+
+    if ((res.status === 400 || res.status === 404) && model !== models[models.length - 1]) {
+      console.warn(`[generate-articles] Gemini model unavailable, retrying with fallback: ${model}`);
+      continue;
+    }
+
+    throw lastError;
+  }
+
+  throw lastError || new Error("Gemini API 요청에 실패했습니다.");
 }
 
 function pickReviewIndices(reviewCount: number, articleVariation: number, windowSize = 30, segments = 8) {
@@ -1026,24 +1071,11 @@ JSON 형식으로 응답하세요:
   ]${placeHasReviewImages ? ',\n  "usedReviewImageIndices": [[리뷰인덱스, 이미지인덱스], ...]' : ""}
 }`;
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: restaurantPrompt }] }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0.95, maxOutputTokens: 8192 },
-        }),
-      }
-    );
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Gemini API 오류 (${res.status}): ${err.slice(0, 200)}`);
-    }
-
-    const data = await res.json();
+    const data = await requestGeminiContent(apiKey, restaurantPrompt, {
+      responseMimeType: "application/json",
+      temperature: 0.95,
+      maxOutputTokens: 8192,
+    });
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("AI 응답이 비어있습니다.");
 
@@ -1168,28 +1200,11 @@ JSON 형식으로 응답하세요:
 		  ]${hasAnyReviewImages ? ',\n  "usedReviewImageIndices": [[리뷰인덱스, 이미지인덱스], ...]' : ""}
 		}`;
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0.9,
-          maxOutputTokens: 8192,
-        },
-      }),
-    }
-  );
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini API 오류 (${res.status}): ${err.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
+  const data = await requestGeminiContent(apiKey, prompt, {
+    responseMimeType: "application/json",
+    temperature: 0.9,
+    maxOutputTokens: 8192,
+  });
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("AI 응답이 비어있습니다.");
 
