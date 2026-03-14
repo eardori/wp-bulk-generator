@@ -51,7 +51,9 @@ function strip_review_reference_markers($html) {
   $patterns = array(
     '/\[(?:리뷰|review)\s*#\s*\d+\]/iu',
     '/\((?:리뷰|review)\s*#\s*\d+\)/iu',
+    '/[（(][^()（）]*#\s*\d+[^()（）]*[)）]/u',
     '/(?:^|\s)(?:리뷰|review)\s*#\s*\d+(?=[\s,.;:!?)\]]|$)/iu',
+    '/(?:,\s*)?#\s*\d+(?:\s*등)?/u',
   );
 
   return preg_replace($patterns, ' ', $html);

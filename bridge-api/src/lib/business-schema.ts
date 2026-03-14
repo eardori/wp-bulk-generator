@@ -133,7 +133,9 @@ export function stripReviewReferenceMarkers(html: string): string {
   return html
     .replace(/\[(?:리뷰|review)\s*#\s*\d+\]/gi, " ")
     .replace(/\((?:리뷰|review)\s*#\s*\d+\)/gi, " ")
+    .replace(/[（(][^()（）]*#\s*\d+[^()（）]*[)）]/g, " ")
     .replace(/(?:^|\s)(?:리뷰|review)\s*#\s*\d+(?=[\s,.;:!?)\]])/gi, " ")
+    .replace(/(?:,\s*)?#\s*\d+(?:\s*등)?/g, " ")
     .replace(/\s{2,}/g, " ");
 }
 
