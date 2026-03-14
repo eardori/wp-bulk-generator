@@ -1,16 +1,7 @@
-import { execFileSync } from "child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import type { FastifyInstance } from "fastify";
-import { tmpdir } from "os";
-import { join } from "path";
-import { setupSSE } from "../utils/sse.js";
+import { readDashboardCache } from "../lib/dashboard-cache.js";
 import { fetchCredentials, fetchGroups } from "../lib/ec2-client.js";
-import {
-  readDashboardCache,
-  setDashboardSiteCache,
-  type DashboardCacheEntry,
-  type DashboardPost,
-} from "../lib/dashboard-cache.js";
+import { setupSSE } from "../utils/sse.js";
 
 type SiteCredential = {
   slug: string;
@@ -23,142 +14,12 @@ type SiteCredential = {
   site_dir?: string;
 };
 
-type WPPost = DashboardPost;
-
 type SiteGroup = {
   id: string;
   name: string;
   slugs: string[];
   createdAt: string;
 };
-
-const WP_SITES_ROOT = process.env.WP_SITES_ROOT || "/var/www";
-
-type RemotePostsResult = {
-  ok: boolean;
-  posts: WPPost[];
-};
-
-type RemoteCountResult = {
-  ok: boolean;
-  totalCount: number;
-};
-
-function getLocalSiteDir(site: SiteCredential): string {
-  return site.site_dir || join(WP_SITES_ROOT, site.slug);
-}
-
-function hasLocalWordPress(site: SiteCredential): boolean {
-  return existsSync(join(getLocalSiteDir(site), "wp-config.php"));
-}
-
-async function fetchRemoteWPPosts(site: SiteCredential, perPage = 15): Promise<RemotePostsResult> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
-  try {
-    const auth = Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
-    const res = await fetch(
-      `${site.url}/wp-json/wp/v2/posts?per_page=${perPage}&_fields=id,title,link,date,status&status=publish&orderby=date&order=desc`,
-      { headers: { Authorization: `Basic ${auth}` }, signal: controller.signal }
-    );
-    if (!res.ok) return { ok: false, posts: [] };
-    const data = await res.json();
-    return { ok: true, posts: Array.isArray(data) ? data : [] };
-  } catch { return { ok: false, posts: [] }; }
-  finally { clearTimeout(timeout); }
-}
-
-async function fetchRemoteWPPostCount(site: SiteCredential): Promise<RemoteCountResult> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
-  try {
-    const auth = Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
-    const res = await fetch(
-      `${site.url}/wp-json/wp/v2/posts?per_page=1&_fields=id&status=publish`,
-      { headers: { Authorization: `Basic ${auth}` }, signal: controller.signal }
-    );
-    if (!res.ok) return { ok: false, totalCount: 0 };
-    const total = res.headers.get("X-WP-Total");
-    return { ok: true, totalCount: total ? parseInt(total, 10) : 0 };
-  } catch { return { ok: false, totalCount: 0 }; }
-  finally { clearTimeout(timeout); }
-}
-
-function fetchLocalSiteData(site: SiteCredential, perPage = 15): DashboardCacheEntry {
-  const siteDir = getLocalSiteDir(site);
-  const tempDir = mkdtempSync(join(tmpdir(), "wpbulk-dashboard-"));
-  const scriptPath = join(tempDir, "dashboard-local.php");
-
-  try {
-    writeFileSync(
-      scriptPath,
-      `<?php
-$posts = get_posts([
-  'post_type' => 'post',
-  'post_status' => 'publish',
-  'posts_per_page' => ${perPage},
-  'orderby' => 'date',
-  'order' => 'DESC',
-]);
-
-$payload = array_map(function ($post) {
-  return [
-    'id' => (int) $post->ID,
-    'title' => ['rendered' => (string) get_the_title($post)],
-    'link' => (string) get_permalink($post),
-    'date' => (string) get_post_time(DATE_ATOM, true, $post),
-    'status' => 'publish',
-  ];
-}, $posts);
-
-$counts = wp_count_posts('post');
-$total_count = isset($counts->publish) ? (int) $counts->publish : count($payload);
-
-echo wp_json_encode([
-  'posts' => $payload,
-  'totalCount' => $total_count,
-], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-`
-    );
-
-    const output = execFileSync(
-      "wp",
-      ["eval-file", scriptPath, `--path=${siteDir}`, "--allow-root"],
-      { encoding: "utf8", timeout: 45000 }
-    ).trim();
-
-    const parsed = JSON.parse(output) as Partial<DashboardCacheEntry>;
-
-    return {
-      posts: Array.isArray(parsed.posts) ? parsed.posts as WPPost[] : [],
-      totalCount: typeof parsed.totalCount === "number" ? parsed.totalCount : 0,
-      cachedAt: Date.now(),
-    };
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-}
-
-async function fetchSiteData(site: SiteCredential): Promise<DashboardCacheEntry> {
-  const [postsResult, countResult] = await Promise.all([
-    fetchRemoteWPPosts(site, 15),
-    fetchRemoteWPPostCount(site),
-  ]);
-
-  if (!postsResult.ok || !countResult.ok) {
-    if (!hasLocalWordPress(site)) {
-      throw new Error(`WordPress unavailable for ${site.slug}`);
-    }
-
-    return fetchLocalSiteData(site, 15);
-  }
-
-  return {
-    posts: postsResult.posts,
-    totalCount: countResult.totalCount,
-    cachedAt: Date.now(),
-  };
-}
 
 function normalizeGroups(input: unknown): SiteGroup[] {
   if (Array.isArray(input)) {
@@ -189,59 +50,20 @@ export async function dashboardRoutes(app: FastifyInstance) {
       const sites = normalizeSites(sitesRaw);
       const groups = normalizeGroups(await fetchGroups());
       const cache = readDashboardCache();
-      const missingSites: SiteCredential[] = [];
 
       send({ type: "meta", sites, groups });
 
       for (const site of sites) {
         const cached = cache.sites[site.slug];
 
-        if (!cached) {
-          missingSites.push(site);
-          continue;
-        }
-
         send({
           type: "posts",
           slug: site.slug,
-          posts: cached.posts,
-          totalCount: cached.totalCount,
-          ...(cached.error ? { error: true } : {}),
+          posts: cached?.posts || [],
+          totalCount: cached?.totalCount || 0,
+          ...(cached ? {} : { cacheMissing: true }),
+          ...(cached?.error ? { error: true } : {}),
         });
-      }
-
-      const BATCH_SIZE = 2;
-      for (let i = 0; i < missingSites.length; i += BATCH_SIZE) {
-        const batch = missingSites.slice(i, i + BATCH_SIZE);
-        await Promise.all(
-          batch.map(async (site) => {
-            try {
-              const entry = await fetchSiteData(site);
-              await setDashboardSiteCache(site.slug, entry);
-              send({
-                type: "posts",
-                slug: site.slug,
-                posts: entry.posts,
-                totalCount: entry.totalCount,
-              });
-            } catch {
-              const failedEntry: DashboardCacheEntry = {
-                posts: [],
-                totalCount: 0,
-                cachedAt: Date.now(),
-                error: true,
-              };
-              await setDashboardSiteCache(site.slug, failedEntry);
-              send({
-                type: "posts",
-                slug: site.slug,
-                posts: [],
-                totalCount: 0,
-                error: true,
-              });
-            }
-          })
-        );
       }
 
       send({ type: "done" });

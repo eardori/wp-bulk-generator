@@ -41,6 +41,7 @@ type SitePostData = {
   totalCount: number;
   loaded: boolean;
   error?: boolean;
+  cacheMissing?: boolean;
 };
 
 type PostMap = Record<string, SitePostData>;
@@ -130,6 +131,7 @@ function SiteCard({
   const posts = postData?.posts ?? [];
   const loaded = postData?.loaded ?? false;
   const hasError = postData?.error;
+  const cacheMissing = postData?.cacheMissing;
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden hover:border-gray-700 transition-all">
@@ -149,6 +151,10 @@ function SiteCard({
           <div className="flex-shrink-0 text-right">
             {!loaded ? (
               <Spinner size={3} />
+            ) : cacheMissing ? (
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">
+                미캐시
+              </span>
             ) : (
               <span
                 className={`text-xs font-bold px-2 py-0.5 rounded-full ${
@@ -186,7 +192,14 @@ function SiteCard({
       {/* Posts preview */}
       {loaded && (
         <>
-          {posts.length > 0 ? (
+          {cacheMissing ? (
+            <div className="border-t border-gray-800 px-4 py-3">
+              <p className="text-xs text-amber-400/80">아직 캐시에 들어오지 않은 사이트</p>
+              <p className="text-[11px] text-gray-600 mt-1">
+                다음 발행 또는 배포 이벤트 후 대시보드 캐시에 반영됩니다.
+              </p>
+            </div>
+          ) : posts.length > 0 ? (
             <div className="border-t border-gray-800">
               {/* Show first 3 always */}
               <ul className="divide-y divide-gray-800/60">
@@ -301,6 +314,7 @@ export default function DashboardPage() {
               totalCount: (evt.totalCount as number) ?? 0,
               loaded: true,
               error: evt.error as boolean | undefined,
+              cacheMissing: evt.cacheMissing as boolean | undefined,
             },
           }));
         } else if (evt.type === "error") {
@@ -325,8 +339,12 @@ export default function DashboardPage() {
 
   // ── Derived ────────────────────────────────────────────────────
 
-  const totalPosts = Object.values(postMap).reduce((s, d) => s + (d.totalCount || 0), 0);
+  const totalPosts = Object.values(postMap).reduce(
+    (sum, data) => sum + (data.cacheMissing ? 0 : data.totalCount || 0),
+    0
+  );
   const loadedCount = Object.keys(postMap).length;
+  const missingCacheCount = Object.values(postMap).filter((data) => data.cacheMissing).length;
 
   // Map slug → group names
   const slugToGroups: Record<string, string[]> = {};
@@ -403,14 +421,21 @@ export default function DashboardPage() {
           },
           {
             label: "총 발행 글",
-            value: done ? `${totalPosts}개` : loadingPosts ? `${totalPosts}…` : "—",
+            value:
+              done
+                ? missingCacheCount > 0
+                  ? `${totalPosts}개*`
+                  : `${totalPosts}개`
+                : loadingPosts
+                ? `${totalPosts}…`
+                : "—",
             icon: "📝",
             color: "amber",
           },
           {
             label: "평균 글/사이트",
             value:
-              done && sites.length > 0
+              done && sites.length > 0 && missingCacheCount === 0
                 ? `${(totalPosts / sites.length).toFixed(1)}개`
                 : loadingPosts
                 ? "…"
@@ -429,6 +454,12 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+
+      {done && missingCacheCount > 0 && (
+        <p className="text-xs text-amber-400/80 -mt-4">
+          * {missingCacheCount}개 사이트는 아직 대시보드 캐시에 동기화되지 않았습니다.
+        </p>
+      )}
 
       {/* ── 사이트 그룹 ─────────────────────────────────────────── */}
       {!loading && (
