@@ -59,6 +59,123 @@ function strip_review_reference_markers($html) {
   return preg_replace($patterns, ' ', $html);
 }
 
+function is_placeholder_telephone($telephone) {
+  return (bool) preg_match('/(?:1234-5678|0000-0000|1111-1111|9999-9999)/', (string) $telephone);
+}
+
+function cleanup_uncertain_place_info_rows($html) {
+  $row_patterns = array(
+    '/<tr[^>]*>[\s\S]*?(?:전화번호|전화|문의)[\s\S]*?<\/tr>/iu',
+    '/<tr[^>]*>[\s\S]*?주차[\s\S]*?<\/tr>/iu',
+    '/<tr[^>]*>[\s\S]*?예약[\s\S]*?<\/tr>/iu',
+    '/<tr[^>]*>[\s\S]*?영업시간[\s\S]*?(?:확인 필요|직접 확인 필요|가게 직접 확인 필요|문의 필요|정보 부족)[\s\S]*?<\/tr>/iu',
+  );
+
+  foreach ($row_patterns as $pattern) {
+    $html = preg_replace($pattern, '', $html);
+  }
+
+  return $html;
+}
+
+function cleanup_uncertain_faq_blocks($html) {
+  $block_patterns = array(
+    '/<div[^>]*>[\s\S]*?<strong>\s*Q\d+:\s*[^<]*(?:주차|콜키지|전화|예약)[\s\S]*?<\/div>/iu',
+    '/<div[^>]*>[\s\S]*?방문 전\s*가게에\s*직접\s*문의[\s\S]*?<\/div>/iu',
+    '/<dt[^>]*>[\s\S]*?(?:주차|전화|예약|콜키지)[\s\S]*?<\/dt>\s*<dd[^>]*>[\s\S]*?<\/dd>/iu',
+  );
+
+  foreach ($block_patterns as $pattern) {
+    $html = preg_replace($pattern, '', $html);
+  }
+
+  return $html;
+}
+
+function cleanup_empty_html_blocks($html) {
+  $patterns = array(
+    '/<p[^>]*>\s*(?:<em[^>]*>\s*)?<\/p>/iu',
+    '/<li[^>]*>\s*<\/li>/iu',
+    '/<div[^>]*>\s*<\/div>/iu',
+    '/<dt[^>]*>\s*<\/dt>\s*<dd[^>]*>\s*<\/dd>/iu',
+    '/<dt[^>]*>[\s\S]*?<\/dt>\s*<dd[^>]*>\s*A:\s*[^<]{0,20}<\/dd>/iu',
+    '/<tr[^>]*>\s*<td[^>]*>[\s\S]*?<\/td>\s*<td[^>]*>\s*(?:A:\s*)?[\s()\-]*<\/td>\s*<\/tr>/iu',
+    '/<tbody[^>]*>\s*<\/tbody>/iu',
+    '/<table[^>]*>\s*(?:<thead[^>]*>[\s\S]*?<\/thead>)?\s*<\/table>/iu',
+  );
+
+  foreach ($patterns as $pattern) {
+    $html = preg_replace($pattern, '', $html);
+  }
+
+  $html = preg_replace('/\s{2,}/u', ' ', $html);
+  $html = preg_replace('/>\s+</', '><', $html);
+
+  return trim((string) $html);
+}
+
+function cleanup_existing_post_language($html) {
+  $html = (string) $html;
+
+  $direct_replacements = array(
+    '이번 리뷰에서는 직접 경험한 메뉴 구성과 가격, 그리고 방문 팁까지 상세하게 정리했습니다.' => '이 글에서는 메뉴 구성과 가격, 그리고 방문 정보를 정리했습니다.',
+    '리뷰를 기반으로 파악된 주요 메뉴와 예상 가격대는 다음과 같습니다.' => '리뷰에서 반복적으로 언급된 주요 메뉴와 가격대는 다음과 같습니다.',
+    '리뷰에 따르면' => '리뷰에서는',
+    '리뷰 에 따르면' => '리뷰에서는',
+    '예상 가격대' => '가격대',
+  );
+
+  $html = str_replace(array_keys($direct_replacements), array_values($direct_replacements), $html);
+
+  $regex_replacements = array(
+    '/<p[^>]*>\s*<em>\s*\(참고:\s*위 가격은 실제 방문 시 변동될 수 있으며,\s*리뷰 기반 추정치입니다\.\)\s*<\/em>\s*<\/p>/iu' => '',
+    '/처음 방문자 추천 조합\s*&\s*피해야 할 메뉴/u' => '처음 방문자 추천 조합',
+    '/직접 경험한\s*/u' => '',
+    '/직접 방문(?:한|하여|해서)?\s*/u' => '',
+    '/리뷰\s*기반\s*추정치(?:입니다)?/u' => '',
+    '/리뷰상/u' => '',
+    '/추정/u' => '',
+    '/현장 기준,\s*/u' => '',
+    '/[（(]\s*현장\s*기준\s*[)）]/u' => '',
+    '/현장\s*기준/u' => '',
+    '/예상하시면 됩니다\./u' => '입니다.',
+    '/예상해야 합니다\./u' => '입니다.',
+    '/실제로\s*점심시간에\s*[^<.]*?할인(?:을|이)\s*제공하는\s*경우도\s*있어[^<.]*\./u' => '갈비탕은 식사 메뉴로 자주 언급됩니다.',
+    '/방문 전\s*가게에\s*직접\s*문의하여\s*정확한\s*주차\s*정보를\s*확인하는\s*것이\s*좋습니다\./u' => '',
+    '/방문 전\s*매장에\s*문의하시는\s*것이\s*좋습니다\./u' => '',
+    '/가능한\s*것으로\s*보이나[^<.]*\./u' => '',
+    '/정보\s*부족\s*-\s*문의\s*필요/u' => '',
+    '/\s*\(단,\s*일부\s*제한이\s*있을\s*수\s*있으니\s*방문\s*전\s*확인\s*필요\)\s*/u' => '',
+    '/창밖\s*뷰가\s*좋은\s*좌석을\s*미리\s*요청하는\s*것도\s*좋은\s*팁입니다\./u' => '',
+    '/피해야\s*할\s*메뉴를\s*특정하기는\s*어렵지만[^<.]*\./u' => '',
+    '/[（(]\s*리뷰상\s*정보\s*확인\s*필요\s*[)）]/u' => '',
+    '/리뷰상\s*정보\s*확인\s*필요/u' => '',
+    '/[（(]\s*가게\s*직접\s*확인\s*필요\s*[)）]/u' => '',
+    '/[（(]\s*확인\s*필요\s*[)）]/u' => '',
+    '/[（(]\s*문의\s*필요\s*[)）]/u' => '',
+    '/[（(]\s*직접\s*확인\s*필요\s*[)）]/u' => '',
+    '/[（(]\s*[)）]/u' => '',
+  );
+
+  foreach ($regex_replacements as $pattern => $replacement) {
+    $html = preg_replace($pattern, $replacement, $html);
+  }
+
+  $block_removals = array(
+    '/<p[^>]*>[\s\S]*?가능할\s*수\s*있(?:습니다|어요)[\s\S]*?<\/p>/iu',
+    '/<li[^>]*>[\s\S]*?(?:확인 필요|문의 필요|방문 전 확인|방문 전 문의|직접 확인 필요|가게 직접 확인 필요)[\s\S]*?<\/li>/iu',
+  );
+
+  foreach ($block_removals as $pattern) {
+    $html = preg_replace($pattern, '', $html);
+  }
+
+  $html = cleanup_uncertain_place_info_rows($html);
+  $html = cleanup_uncertain_faq_blocks($html);
+
+  return cleanup_empty_html_blocks($html);
+}
+
 function improve_image_alts($html, $title) {
   $counter = 0;
 
@@ -104,6 +221,9 @@ function extract_faq_items($html) {
     foreach ($matches as $m) {
       $q = wp_strip_all_tags($m[1]);
       $a = wp_strip_all_tags($m[2]);
+      if (preg_match('/(확인 필요|직접 확인|가게 직접 확인|문의 필요|방문 전 확인|문의하시는 것이 좋습니다|가능한 것으로 보이나|있을 수 있습니다|정보 부족)/u', $a)) {
+        continue;
+      }
       if ($q !== '' && mb_strlen($a) > 20) {
         $faq_items[] = array(
           '@type' => 'Question',
@@ -118,6 +238,9 @@ function extract_faq_items($html) {
     foreach ($matches as $m) {
       $q = wp_strip_all_tags($m[1]);
       $a = wp_strip_all_tags($m[2]);
+      if (preg_match('/(확인 필요|직접 확인|가게 직접 확인|문의 필요|방문 전 확인|문의하시는 것이 좋습니다|가능한 것으로 보이나|있을 수 있습니다|정보 부족)/u', $a)) {
+        continue;
+      }
       if ((mb_strpos($q, '?') !== false || mb_strpos($q, '？') !== false) && mb_strlen($a) > 20) {
         $faq_items[] = array(
           '@type' => 'Question',
@@ -128,10 +251,13 @@ function extract_faq_items($html) {
     }
   }
 
-  if (empty($faq_items) && preg_match_all('/<p[^>]*>[\s\S]*?<strong>(.*?\?.*?)<\/strong>[\s\S]*?<\/p>\s*<p[^>]*>(.*?)<\/p>/si', $html, $matches, PREG_SET_ORDER)) {
+  if (empty($faq_items) && preg_match_all('/<p[^>]*>\s*<strong>(.*?\?.*?)<\/strong>\s*<\/p>\s*<p[^>]*>(.*?)<\/p>/si', $html, $matches, PREG_SET_ORDER)) {
     foreach ($matches as $m) {
       $q = wp_strip_all_tags($m[1]);
       $a = wp_strip_all_tags($m[2]);
+      if (preg_match('/(확인 필요|직접 확인|가게 직접 확인|문의 필요|방문 전 확인|문의하시는 것이 좋습니다|가능한 것으로 보이나|있을 수 있습니다|정보 부족)/u', $a)) {
+        continue;
+      }
       if (mb_strlen($a) > 20) {
         $faq_items[] = array(
           '@type' => 'Question',
@@ -210,6 +336,10 @@ function build_business_schema($post, $content, $title, $excerpt) {
   } elseif (preg_match('/(0\d{1,2}-\d{3,4}-\d{4})/', $plain_text, $tel_match)) {
     $telephone = $tel_match[1];
   } else {
+    $telephone = '';
+  }
+
+  if ($telephone !== '' && is_placeholder_telephone($telephone)) {
     $telephone = '';
   }
 
@@ -350,7 +480,9 @@ foreach ($posts as $post) {
   $short = mb_substr($title, 0, 35);
   $original_content = (string) $post->post_content;
   $content_without_schemas = strip_json_ld_scripts($original_content);
-  $content = improve_image_alts(strip_review_reference_markers($content_without_schemas), $title);
+  $content = cleanup_existing_post_language(
+    improve_image_alts(strip_review_reference_markers($content_without_schemas), $title)
+  );
 
   $excerpt = wp_strip_all_tags($post->post_excerpt ?: wp_trim_words($content, 30, ''));
   $excerpt = mb_substr($excerpt, 0, 160);
