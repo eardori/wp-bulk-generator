@@ -17,6 +17,10 @@ const REVIEW_REF_PATTERNS = [
   /\s*\[리뷰#\d+\]\s*/g,
   /\s*\(리뷰#\d+\)\s*/g,
   /(^|[\s>"'“‘(\[])(리뷰#\d+)(?=([\s<"'”’)\].,:;!?]|$))/g,
+  /\s*\[review#\d+\]\s*/gi,
+  /\s*\(review#\d+\)\s*/gi,
+  /(^|[\s>"'“‘(\[])(review#\d+)(?=([\s<"'”’)\].,:;!?]|$))/gi,
+  /\s*리뷰\s*\d+\s*번\s*/g,
 ];
 
 export function sanitizeInternalReviewRefs(text: string): string {
@@ -25,6 +29,10 @@ export function sanitizeInternalReviewRefs(text: string): string {
   sanitized = sanitized.replace(REVIEW_REF_PATTERNS[0], " ");
   sanitized = sanitized.replace(REVIEW_REF_PATTERNS[1], " ");
   sanitized = sanitized.replace(REVIEW_REF_PATTERNS[2], "$1");
+  sanitized = sanitized.replace(REVIEW_REF_PATTERNS[3], " ");
+  sanitized = sanitized.replace(REVIEW_REF_PATTERNS[4], " ");
+  sanitized = sanitized.replace(REVIEW_REF_PATTERNS[5], "$1");
+  sanitized = sanitized.replace(REVIEW_REF_PATTERNS[6], " ");
   sanitized = sanitized.replace(/\s{2,}/g, " ");
 
   return sanitized.trim();

@@ -59,7 +59,8 @@ type GeneratedArticle = {
 
 type ArticleTask = {
   site: SiteCredential;
-  articleVariation: number;
+  siteArticleIndex: number;
+  diversityIndex: number;
 };
 
 type IndexedReview = {
@@ -76,6 +77,11 @@ type ProductAngleConfig = {
 
 type ReviewImageIndex = [number, number];
 type SitePersona = NonNullable<SiteCredential["persona"]>;
+type ReaderLens = {
+  label: string;
+  instruction: string;
+  narrativeAngle: string;
+};
 
 const DEFAULT_PERSONA: SitePersona = {
   name: "운영팀",
@@ -86,16 +92,67 @@ const DEFAULT_PERSONA: SitePersona = {
   bio: "실구매 리뷰와 공개 정보를 바탕으로 핵심만 정리해 전달합니다.",
 };
 
+const REVIEW_TERM_STOPWORDS = new Set([
+  "정말", "진짜", "그냥", "약간", "조금", "너무", "엄청", "가장", "많이", "매우",
+  "그리고", "하지만", "그래서", "또한", "이런", "저런", "같은", "이곳", "여기", "거의",
+  "방문", "후기", "리뷰", "매장", "가게", "음식", "제품", "사용", "구매", "추천",
+  "about", "with", "this", "that", "very", "really", "good", "nice",
+]);
+
+const PRODUCT_READER_LENSES: ReaderLens[] = [
+  { label: "입문자 관점", instruction: "처음 접하는 사람이 이해하기 쉽게, 용어를 풀어서 설명하세요.", narrativeAngle: "처음 사는 사람이 가장 궁금해할 포인트 중심" },
+  { label: "가성비 중시 관점", instruction: "가격 대비 만족도와 아쉬운 점을 냉정하게 비교하세요.", narrativeAngle: "돈값 하는지 판단하는 흐름" },
+  { label: "성분 분석 관점", instruction: "성분/원료와 리뷰 반응의 연결을 중심으로 해석하세요.", narrativeAngle: "스펙과 실제 반응을 엮는 분석형" },
+  { label: "민감형 사용자 관점", instruction: "자극, 불편감, 호불호 포인트를 선명하게 나누세요.", narrativeAngle: "맞는 사람과 주의할 사람을 분리" },
+  { label: "실사용 루틴 관점", instruction: "언제, 어떻게 쓰는지와 사용 팁을 구체적으로 정리하세요.", narrativeAngle: "실제 사용 장면을 중심으로 전개" },
+  { label: "장단점 균형 관점", instruction: "광고처럼 보이지 않게 장점과 단점을 거의 같은 비중으로 다루세요.", narrativeAngle: "구매 전 체크리스트형" },
+  { label: "재구매 판단 관점", instruction: "다시 살지 말지를 결정하는 기준으로 서술하세요.", narrativeAngle: "재구매 의사와 추천 대상을 분리" },
+  { label: "문제 해결 관점", instruction: "사용자 고민이 실제로 얼마나 해결되는지를 리뷰 근거로 판단하세요.", narrativeAngle: "질문 해결형 결론 우선 구조" },
+];
+
+const PLACE_READER_LENSES: ReaderLens[] = [
+  { label: "첫 방문자 관점", instruction: "처음 가는 사람이 헷갈릴 포인트를 미리 알려주세요.", narrativeAngle: "처음 가는 사람용 실전 안내" },
+  { label: "데이트 방문 관점", instruction: "분위기, 좌석, 동선, 예약 포인트를 강조하세요.", narrativeAngle: "분위기와 체류 경험 중심" },
+  { label: "가족 외식 관점", instruction: "주차, 좌석, 메뉴 난이도, 아이/어르신 적합성을 나눠 설명하세요.", narrativeAngle: "가족 단위 방문 판단형" },
+  { label: "가성비 중시 관점", instruction: "가격대, 양, 만족도, 재방문 의사를 중심으로 평가하세요.", narrativeAngle: "가격 대비 만족도 검증형" },
+  { label: "로컬 추천 관점", instruction: "관광객보다 동네 단골이 좋아할 포인트를 강조하세요.", narrativeAngle: "숨은 맛집 발굴형" },
+  { label: "메뉴 선택 관점", instruction: "무엇을 시켜야 하는지와 피해야 할 선택지를 명확히 나누세요.", narrativeAngle: "메뉴 추천과 조합 중심" },
+  { label: "웨이팅 회피 관점", instruction: "방문 시간대, 예약/대기, 동선 팁을 실용적으로 정리하세요.", narrativeAngle: "실전 방문 팁 중심" },
+  { label: "SNS 기대 대비 현실 관점", instruction: "사진발과 실제 만족도를 분리해서 솔직하게 다루세요.", narrativeAngle: "기대 vs 현실 비교형" },
+];
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+function greatestCommonDivisor(a: number, b: number): number {
+  let x = Math.abs(a);
+  let y = Math.abs(b);
+  while (y !== 0) {
+    const temp = x % y;
+    x = y;
+    y = temp;
+  }
+  return x || 1;
+}
+
+function pickCoPrimeStep(reviewCount: number, preferredStep: number): number {
+  let step = Math.max(1, preferredStep);
+  while (greatestCommonDivisor(step, reviewCount) !== 1) {
+    step += 1;
+  }
+  return step;
+}
 
 function pickReviewIndices(reviewCount: number, articleVariation: number, windowSize = 30, segments = 8) {
   if (reviewCount <= 0) return [];
   if (reviewCount <= windowSize) {
     return Array.from({ length: reviewCount }, (_, idx) => idx);
   }
-  const step = Math.max(5, Math.floor(reviewCount / segments));
-  const offset = (articleVariation * step) % reviewCount;
-  return Array.from({ length: windowSize }, (_, idx) => (offset + idx) % reviewCount);
+
+  const offsetStep = pickCoPrimeStep(reviewCount, Math.max(3, Math.floor(reviewCount / segments)));
+  const spreadStep = pickCoPrimeStep(reviewCount, Math.max(2, Math.floor(reviewCount / windowSize) + 1));
+  const offset = (articleVariation * offsetStep) % reviewCount;
+
+  return Array.from({ length: windowSize }, (_, idx) => (offset + idx * spreadStep) % reviewCount);
 }
 
 function buildIndexedReviews(
@@ -137,6 +194,93 @@ function summarizeContentPrompt(prompt: string, limit = 90): string {
     return "사용자 프롬프트 기반";
   }
   return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function pickReaderLens(isRestaurant: boolean, articleVariation: number): ReaderLens {
+  const pool = isRestaurant ? PLACE_READER_LENSES : PRODUCT_READER_LENSES;
+  return pool[articleVariation % pool.length];
+}
+
+function extractFrequentReviewTerms(reviews: ProductReview[], limit = 8): string[] {
+  const counts = new Map<string, number>();
+
+  for (const review of reviews) {
+    const source = [
+      review.purchaseOption?.trim() || "",
+      review.text || "",
+    ].join(" ");
+
+    const tokens = source.match(/[A-Za-z0-9가-힣]{2,}/g) || [];
+    for (const rawToken of tokens) {
+      const token = rawToken.toLowerCase();
+      if (REVIEW_TERM_STOPWORDS.has(token)) continue;
+      if (/^\d+$/.test(token)) continue;
+      counts.set(token, (counts.get(token) || 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([token, count]) => `${token}(${count})`);
+}
+
+function buildDirectReviewCoverageSummary(
+  reviews: ProductReview[],
+  heading = "전체 리뷰 공통 패턴"
+): string {
+  if (reviews.length === 0) return "";
+
+  const averageRating = Math.round(
+    (reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length) * 10
+  ) / 10;
+  const positiveCount = reviews.filter((review) => review.rating >= 4).length;
+  const negativeCount = reviews.filter((review) => review.rating > 0 && review.rating <= 3).length;
+  const photoCount = reviews.filter((review) => (review.images?.length || 0) > 0).length;
+  const reviewerCount = new Set(
+    reviews.map((review) => review.reviewerName?.trim()).filter(Boolean)
+  ).size;
+  const frequentTerms = extractFrequentReviewTerms(reviews, 8);
+  const optionCounts = Array.from(
+    reviews.reduce((acc, review) => {
+      const option = review.purchaseOption?.trim();
+      if (!option) return acc;
+      acc.set(option, (acc.get(option) || 0) + 1);
+      return acc;
+    }, new Map<string, number>())
+  )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  const datedReviews = reviews
+    .map((review) => review.date?.trim())
+    .filter(Boolean)
+    .sort() as string[];
+
+  let section = `\n### ${heading}:\n`;
+  section += `- 전체 확보 리뷰: ${reviews.length}건\n`;
+  section += `- 평균 평점: ${averageRating || 0}점\n`;
+  section += `- 만족 리뷰 비율(4~5점): ${formatPercent(positiveCount, reviews.length)}%\n`;
+  if (negativeCount > 0) {
+    section += `- 아쉬움이 언급된 리뷰 비율(1~3점): ${formatPercent(negativeCount, reviews.length)}%\n`;
+  }
+  if (photoCount > 0) {
+    section += `- 사진 첨부 리뷰: ${photoCount}건\n`;
+  }
+  if (reviewerCount > 0) {
+    section += `- 확인 가능한 리뷰어 수: ${reviewerCount}명\n`;
+  }
+  if (datedReviews.length > 1) {
+    section += `- 리뷰 시기 범위: ${datedReviews[0]!.slice(0, 10)} ~ ${datedReviews[datedReviews.length - 1]!.slice(0, 10)}\n`;
+  }
+  if (optionCounts.length > 0) {
+    section += `- 자주 언급된 메뉴/옵션: ${optionCounts.map(([name, count]) => `${name}(${count})`).join(", ")}\n`;
+  }
+  if (frequentTerms.length > 0) {
+    section += `- 전체 리뷰에서 반복된 핵심 단어: ${frequentTerms.join(", ")}\n`;
+  }
+
+  return section;
 }
 
 function pickRepresentativeReviews(indexedReviews: IndexedReview[]) {
@@ -429,6 +573,7 @@ function buildReviewPromptSection(reviewCollection: ReviewCollection, articleVar
   section += `- 총 리뷰 수: ${totalCount}건\n`;
   section += `- 평균 평점: ${averageRating}점\n`;
   section += `- 평점 분포: ${distStr}\n`;
+  section += buildDirectReviewCoverageSummary(reviews, "전체 리뷰 공통 패턴");
 
   section += `\n### 이번 글의 리뷰 포커스:\n`;
   section += `- 핵심 프레임: ${selectedFocus.label}\n`;
@@ -460,11 +605,11 @@ function buildReviewPromptSection(reviewCollection: ReviewCollection, articleVar
   if (representativeReviews.length > 0) {
     section += `\n### 대표 리뷰 근거 (서로 다른 섹션에 분산 활용):\n`;
     for (const { label, item } of representativeReviews) {
-      section += `- ${label} [리뷰#${item.globalIndex}] ${truncateText(item.review.text, 110)}\n`;
+      section += `- ${label}: ${truncateText(item.review.text, 110)}\n`;
     }
   }
 
-  section += `\n### 실제 리뷰 전문 (${indexedReviews.length}건, 아래 번호는 전역 인덱스):\n`;
+  section += `\n### 실제 리뷰 전문 (${indexedReviews.length}건, 아래 번호는 내부 이미지 매핑용이며 최종 글에 노출 금지):\n`;
   for (const { globalIndex, review } of indexedReviews) {
     const optionLabel = review.purchaseOption?.trim() ? ` | 옵션: ${review.purchaseOption.trim()}` : "";
     const reviewerLabel = review.reviewerName?.trim() ? ` | 작성자: ${review.reviewerName.trim()}` : "";
@@ -499,6 +644,7 @@ function buildPlaceReviewPromptSection(reviews: ProductReview[], articleVariatio
   const representativeReviews = pickRepresentativeReviews(indexedReviews);
 
   let section = `\n\n## 실방문자 리뷰 분석:\n`;
+  section += buildDirectReviewCoverageSummary(reviews, "전체 50개 리뷰 공통 패턴");
   section += `- 이번 글에 전달된 리뷰: ${indexedReviews.length}건\n`;
   section += `- 이번 리뷰 묶음 평균 평점: ${averageRating}점\n`;
   section += `- 만족 리뷰 비율(4~5점): ${formatPercent(positiveCount, indexedReviews.length)}%\n`;
@@ -513,11 +659,11 @@ function buildPlaceReviewPromptSection(reviews: ProductReview[], articleVariatio
   if (representativeReviews.length > 0) {
     section += `\n### 대표 리뷰 근거:\n`;
     for (const { label, item } of representativeReviews) {
-      section += `- ${label} [리뷰#${item.globalIndex}] ${truncateText(item.review.text, 110)}\n`;
+      section += `- ${label}: ${truncateText(item.review.text, 110)}\n`;
     }
   }
 
-  section += `\n### 실제 리뷰 전문 (${indexedReviews.length}건, 아래 번호는 전역 인덱스):\n`;
+  section += `\n### 실제 리뷰 전문 (${indexedReviews.length}건, 아래 번호는 내부 이미지 매핑용이며 최종 글에 노출 금지):\n`;
   for (const { globalIndex, review } of indexedReviews) {
     const optionLabel = review.purchaseOption?.trim() ? ` | 메뉴/옵션: ${review.purchaseOption.trim()}` : "";
     const dateLabel = review.date?.trim() ? ` | 날짜: ${review.date.slice(0, 10)}` : "";
@@ -542,18 +688,25 @@ async function generateForSite(
   site: SiteCredential,
   reviewCollection?: ReviewCollection,
   articleVariation = 0,
+  siteArticleIndex = 0,
 ): Promise<GeneratedArticle> {
   const persona = normalizePersona(site);
   const sourceTitle = product.title?.trim() || site.title || site.slug;
   const normalizedPrompt = normalizeContentPrompt(contentPrompt);
   const promptSummary = summarizeContentPrompt(normalizedPrompt);
+  const isRestaurant = product.source === "naver-place";
+  const readerLens = pickReaderLens(isRestaurant, articleVariation);
   const promptInstructionBlock = `## 사용자 작성 프롬프트 (반드시 반영):
 ${normalizedPrompt}
 
 ## 프롬프트 반영 원칙:
 - 위 프롬프트의 핵심 질문, 원하는 톤, 구조, 강조 포인트, 금지 사항을 최우선으로 반영할 것
 - 단, 리뷰/상품 데이터와 충돌하는 내용은 지어내지 말고 실제 데이터 기준으로만 해석할 것
-- 프롬프트의 문장을 그대로 복붙하지 말고, 최종 블로그 글 안에서 자연스럽게 소화할 것`;
+- 프롬프트의 문장을 그대로 복붙하지 말고, 최종 블로그 글 안에서 자연스럽게 소화할 것
+- 사용자가 "다양한 페르소나", "각기 다른 관점"을 요구한 경우 이번 글은 아래 독자 렌즈를 우선 적용할 것:
+  - 독자 렌즈: ${readerLens.label}
+  - 적용 지시: ${readerLens.instruction}
+  - 서술 각도: ${readerLens.narrativeAngle}`;
 
   const specsSummary =
     Object.keys(product.specs).length > 0
@@ -568,7 +721,9 @@ ${normalizedPrompt}
   } else if (product.reviews.length > 0) {
     const indexedReviews = buildIndexedReviews(product.reviews, articleVariation, 15, 5);
     reviewSection =
-      `\n\n## 제품 리뷰 (스크랩 기반, 이번 글에 전달된 리뷰 ${indexedReviews.length}건):\n` +
+      `\n\n## 제품 리뷰 (스크랩 기반)\n` +
+      buildDirectReviewCoverageSummary(product.reviews, "전체 스크랩 리뷰 공통 패턴") +
+      `\n### 이번 글에 전달된 대표 리뷰 묶음 (${indexedReviews.length}건, 내부 인덱스는 노출 금지):\n` +
       indexedReviews
         .map(
           ({ globalIndex, review }) =>
@@ -580,7 +735,6 @@ ${normalizedPrompt}
   const hasRichReviews = Boolean(reviewCollection && reviewCollection.totalCount > 0);
   const hasAnyReviews = hasRichReviews || product.reviews.length > 0;
   const reviewCount = reviewCollection?.totalCount || product.reviews.length;
-  const isRestaurant = product.source === "naver-place";
   const availableReviewsForImages = hasRichReviews ? reviewCollection!.reviews : product.reviews;
   const hasAnyReviewImages = availableReviewsForImages.some((review) => (review.images?.length || 0) > 0);
   const reviewIntro = hasRichReviews
@@ -784,7 +938,7 @@ ${normalizedPrompt}
 
   const variationHint =
     articleVariation > 0
-      ? `\n⚠️ 같은 페르소나의 ${articleVariation + 1}번째 글입니다. 이전 글과 제목 형식·H2 구조·도입부가 절대 겹치지 않아야 합니다.`
+      ? `\n⚠️ 이번 배치의 ${articleVariation + 1}번째 글입니다. 같은 배치 다른 글들과 제목 형식·H2 구조·도입부·결론 문장이 겹치지 않아야 합니다.${siteArticleIndex > 0 ? ` 동일 사이트의 ${siteArticleIndex + 1}번째 글이므로 같은 사이트 기존 글과도 표현을 더 강하게 분리하세요.` : ""}`
       : "";
 
   // ── 맛집/장소 전용 프롬프트 ────────────────────────────────────
@@ -794,11 +948,15 @@ ${normalizedPrompt}
 
     const placeInfo = [
       product.specs["주소"] && `주소: ${product.specs["주소"]}`,
+      product.specs["지번주소"] && `지번주소: ${product.specs["지번주소"]}`,
+      product.specs["지역"] && `지역: ${product.specs["지역"]}`,
       product.specs["전화"] && `전화: ${product.specs["전화"]}`,
       product.specs["영업시간"] && `영업시간: ${product.specs["영업시간"]}`,
       product.specs["편의시설"] && `편의시설: ${product.specs["편의시설"]}`,
       product.specs["찾아가는길"] && `찾아가는길: ${product.specs["찾아가는길"]}`,
       product.specs["키워드"] && `특징키워드: ${product.specs["키워드"]}`,
+      product.specs["네이버리뷰"] && `네이버 리뷰 요약: ${product.specs["네이버리뷰"]}`,
+      product.specs["블로그리뷰"] && `블로그 리뷰 수: ${product.specs["블로그리뷰"]}`,
     ].filter(Boolean).join("\n");
 
     const restaurantPrompt = `당신은 "${persona.name}"입니다. ${persona.bio || ""}
@@ -818,9 +976,11 @@ ${promptInstructionBlock}
 
 ## 이번 글의 구조 콘셉트:
 - 글쓰기 각도: ${thisRestaurantAngleConfig!.label}
+- 이번 글 독자 렌즈: ${readerLens.label}
+- 독자 렌즈 적용 지시: ${readerLens.instruction}
 - ${thisRestaurantAngleConfig!.titleFormat}
 - ${thisRestaurantAngleConfig!.h2Structure}
-- 전개 원칙: 이번 리뷰 묶음에서 자주 나온 메뉴/분위기/주의점을 중심으로 내용을 채우고, 이전 글과 표현을 겹치지 말 것
+- 전개 원칙: 전체 50개 리뷰 공통 패턴을 먼저 반영하고, 이번 리뷰 묶음에서 자주 나온 메뉴/분위기/주의점을 중심으로 세부 근거를 배치하며, 이전 글과 표현을 겹치지 말 것
 
 ## 작성 규칙:
 1. 글 최상단에 <div class="summary-box"> 요약 박스 필수: 가게명/위치/분위기/추천 메뉴/가격대를 한눈에 파악할 수 있도록
@@ -836,7 +996,9 @@ ${promptInstructionBlock}
 11. HTML 형식 (h2, h3, p, ul, li, strong, em, table 태그)
 12. 마지막에 방문 정보 총정리 <table> 필수 (항목: 위치, 영업시간, 전화, 주차, 예약여부, 가격대)
 13. 리뷰에 없는 웨이팅 시간, 메뉴 가격, 좌석 수는 임의로 확정하지 말고 "리뷰상", "현장 기준"처럼 범위/맥락형으로 적을 것
-${placeHasReviewImages ? '14. 사진이 있는 리뷰는 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입하고, 메뉴/분위기 설명이 나오는 문단 가까이에 배치할 것' : ""}
+14. 리뷰 전문의 [리뷰#숫자]와 내부 인덱스는 작성용 메모일 뿐이며, 최종 HTML/제목/FAQ/요약문에 절대 노출하지 말 것
+15. 같은 배치의 다른 글과 겹치지 않도록, 도입부 비유·핵심 메뉴 선정·결론 문장·추천 대상 설명을 이번 글만의 방식으로 바꿀 것
+${placeHasReviewImages ? '16. 사진이 있는 리뷰는 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입하되, 이 placeholder 주석 외에는 리뷰 인덱스를 노출하지 말 것' : ""}
 
 ## GEO (AI 검색 최적화) 규칙:
 G1. 인용 가능 단락(Citable Passage): 각 H2 섹션 첫 부분에 해당 질문에 대한 완결된 답변을 3~5문장으로 작성할 것. 주변 맥락 없이 그 단락만 읽어도 의미가 통해야 함
@@ -955,6 +1117,8 @@ ${promptInstructionBlock}
 
 ## 이번 글의 구조 콘셉트:
 - 글쓰기 각도: ${thisProductAngleConfig.label}
+- 이번 글 독자 렌즈: ${readerLens.label}
+- 독자 렌즈 적용 지시: ${readerLens.instruction}
 - ${thisProductAngleConfig.titleFormat}
 - ${thisProductAngleConfig.h2Structure}
 - 강조 포인트: ${thisProductAngleConfig.emphasis}
@@ -973,9 +1137,10 @@ ${promptInstructionBlock}
 	11. 제품의 장단점을 균형있게 서술 (E-E-A-T 신뢰도 확보 — 단점 없으면 광고로 인식)
 	12. HTML 형식으로 작성 (h2, h3, p, ul, li, strong, em, table 태그 사용)
 	13. <h2> 사용법 섹션에는 <ol> 단계별 리스트 필수 (HowTo 구조)
-		${hasAnyReviewImages ? '14. 리뷰 전문에 표기된 "[리뷰#숫자]"는 전역 인덱스이므로, 이미지 placeholder를 쓸 때 반드시 그 숫자를 그대로 사용할 것' : ""}
-		${hasAnyReviewImages ? '15. 리뷰 사진이 있는 경우 글 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입 (최대 5개, 설명이 필요한 부분에만)' : ""}
-	16. 리뷰에 없는 효능, 사용 기간, 개선 수치를 임의로 만들지 말고 "리뷰상", "대체로", "많이 언급된"처럼 근거 기반 표현만 사용할 것
+	14. 리뷰 전문의 [리뷰#숫자]와 내부 인덱스는 작성용 메모이므로 최종 HTML/제목/FAQ/요약문에 절대 노출하지 말 것
+	15. 같은 배치의 다른 글과 겹치지 않도록, 제목 톤·도입부 사례·핵심 장단점 배열 순서·결론 문장을 이번 글만의 방식으로 바꿀 것
+		${hasAnyReviewImages ? '16. 리뷰 사진이 있는 경우 글 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입하되, 이 placeholder 주석 외에는 리뷰 인덱스를 노출하지 말 것' : ""}
+	17. 리뷰에 없는 효능, 사용 기간, 개선 수치를 임의로 만들지 말고 "리뷰상", "대체로", "많이 언급된"처럼 근거 기반 표현만 사용할 것
 
 	## GEO (AI 검색 최적화) 규칙:
 	G1. 인용 가능 단락(Citable Passage): 각 H2 섹션 첫 부분에 해당 질문에 대한 완결된 답변을 3~5문장으로 작성할 것. 주변 맥락 없이 그 단락만 읽어도 의미가 통해야 함
@@ -1138,7 +1303,11 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
     const allTasks: ArticleTask[] = [];
     for (const { site, count } of siteConfigs) {
       for (let i = 0; i < count; i++) {
-        allTasks.push({ site, articleVariation: i });
+        allTasks.push({
+          site,
+          siteArticleIndex: i,
+          diversityIndex: allTasks.length,
+        });
       }
     }
 
@@ -1158,7 +1327,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
         const parallelSlice = batchTasks.slice(i, i + PARALLEL);
 
         const results = await Promise.allSettled(
-          parallelSlice.map(async ({ site, articleVariation }, sliceIdx) => {
+          parallelSlice.map(async ({ site, diversityIndex, siteArticleIndex }, sliceIdx) => {
             const globalNum = offset + i + sliceIdx + 1;
 
             send({
@@ -1178,7 +1347,15 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
                   send({ type: "progress", current: globalNum, total, message: `[${globalNum}/${total}] ⏳ 429 재시도 ${attempt}/4 — ${waitSec}초 대기 중...` });
                   await new Promise((r) => setTimeout(r, waitSec * 1000));
                 }
-                return await generateForSite(apiKey, product, contentPrompt, site, reviewCollection, articleVariation);
+                return await generateForSite(
+                  apiKey,
+                  product,
+                  contentPrompt,
+                  site,
+                  reviewCollection,
+                  diversityIndex,
+                  siteArticleIndex
+                );
               } catch (err) {
                 lastErr = err instanceof Error ? err : new Error(String(err));
                 const is429 = lastErr.message.includes("429") || lastErr.message.includes("RESOURCE_EXHAUSTED");

@@ -16,6 +16,7 @@ const INVALID_TITLE_PATTERNS = [
 
 const NAVER_PLACE_TARGET_REVIEW_COUNT = 50;
 const NAVER_PLACE_GRAPHQL_URL = "https://pcmap-api.place.naver.com/graphql";
+const NAVER_PLACE_SUMMARY_URL = "https://map.naver.com/p/api/place/summary";
 const NAVER_PLACE_REVIEW_QUERY = `query getVisitorReviews($input: VisitorReviewsInput) {
   visitorReviews(input: $input) {
     items {
@@ -176,6 +177,39 @@ type NaverPlaceGraphqlReview = {
   }> | null;
 };
 
+type NaverPlaceSummary = {
+  id?: string;
+  name?: string | null;
+  businessType?: string | null;
+  category?: {
+    category?: string | null;
+  } | null;
+  address?: {
+    address?: string | null;
+    roadAddress?: string | null;
+    formattedAddress?: string | null;
+  } | null;
+  businessHours?: {
+    description?: string | null;
+  } | null;
+  visitorReviews?: {
+    score?: number | null;
+    displayText?: string | null;
+  } | null;
+  blogReviews?: {
+    total?: number | null;
+  } | null;
+  coordinate?: {
+    longitude?: number | null;
+    latitude?: number | null;
+  } | null;
+  images?: {
+    images?: Array<{
+      origin?: string | null;
+    }> | null;
+  } | null;
+};
+
 export async function POST(req: NextRequest) {
   try {
     let { url } = await req.json();
@@ -322,22 +356,84 @@ async function scrapeNaverPlaceDirect(url: string): Promise<ScrapedProduct> {
     throw new Error("네이버 플레이스 ID를 찾을 수 없습니다.");
   }
 
-  const reviews = await fetchNaverPlaceReviews(placeId, url);
+  const [reviews, summary] = await Promise.all([
+    fetchNaverPlaceReviews(placeId, url),
+    fetchNaverPlaceSummary(placeId, url).catch(() => null),
+  ]);
   if (reviews.length === 0) {
     throw new Error("네이버 플레이스 리뷰를 찾을 수 없습니다.");
   }
 
-  const title = reviews[0]?.businessName || `네이버 플레이스 ${placeId}`;
-  const images = extractUniqueReviewImages(reviews);
+  const title =
+    summary?.name?.trim() ||
+    reviews[0]?.businessName?.trim() ||
+    `네이버 플레이스 ${placeId}`;
+  const images = mergeUniqueStrings(
+    extractSummaryImageUrls(summary),
+    extractUniqueReviewImages(reviews)
+  );
   const keywordSummary = buildNaverPlaceKeywordSummary(reviews);
+  const primaryAddress =
+    summary?.address?.roadAddress?.trim() ||
+    summary?.address?.address?.trim() ||
+    "";
+  const category = summary?.category?.category?.trim() || "naver-place";
+  const visitorReviewLabel = summary?.visitorReviews?.displayText?.trim() || "";
+  const visitorReviewScore = summary?.visitorReviews?.score;
+  const businessHours = summary?.businessHours?.description?.trim() || "";
+
+  const specs: Record<string, string> = {};
+  if (primaryAddress) {
+    specs["주소"] = primaryAddress;
+    specs.address = primaryAddress;
+  }
+  if (summary?.address?.address?.trim() && summary.address.address.trim() !== primaryAddress) {
+    specs["지번주소"] = summary.address.address.trim();
+  }
+  if (summary?.address?.formattedAddress?.trim()) {
+    specs["지역"] = summary.address.formattedAddress.trim();
+  }
+  if (businessHours) {
+    specs["영업시간"] = businessHours;
+    specs.hours = businessHours;
+  }
+  if (category) {
+    specs["업종"] = category;
+  }
+  if (keywordSummary) {
+    specs["키워드"] = keywordSummary;
+    specs.reviewKeywords = keywordSummary;
+  }
+  if (visitorReviewLabel) {
+    specs["네이버리뷰"] = visitorReviewLabel;
+  }
+  if (typeof visitorReviewScore === "number" && Number.isFinite(visitorReviewScore)) {
+    specs["평균평점"] = `${visitorReviewScore}`;
+  }
+  if (typeof summary?.blogReviews?.total === "number" && summary.blogReviews.total > 0) {
+    specs["블로그리뷰"] = `${summary.blogReviews.total}개`;
+  }
+  if (
+    typeof summary?.coordinate?.latitude === "number" &&
+    typeof summary?.coordinate?.longitude === "number"
+  ) {
+    specs["좌표"] = `${summary.coordinate.latitude}, ${summary.coordinate.longitude}`;
+  }
+
+  const descriptionParts = [
+    primaryAddress,
+    businessHours,
+    keywordSummary ? `리뷰 키워드: ${keywordSummary}` : "",
+    visitorReviewLabel,
+  ].filter(Boolean);
 
   return {
     url,
     title,
-    description: keywordSummary ? `${title} 리뷰 키워드: ${keywordSummary}` : "",
+    description: descriptionParts.join(" | "),
     price: "",
     images,
-    specs: keywordSummary ? { reviewKeywords: keywordSummary } : {},
+    specs,
     reviews: reviews.map((review) => ({
       text: normalizeNaverPlaceBody(review.body),
       rating: review.rating ?? 0,
@@ -351,10 +447,13 @@ async function scrapeNaverPlaceDirect(url: string): Promise<ScrapedProduct> {
           thumbnailUrl: imgUrl,
         })),
     })),
-    rating: null,
+    rating:
+      typeof visitorReviewScore === "number" && Number.isFinite(visitorReviewScore)
+        ? visitorReviewScore
+        : null,
     reviewCount: reviews.length,
     brand: "",
-    category: "naver-place",
+    category,
     source: "naver-place",
   };
 }
@@ -364,6 +463,38 @@ function extractNaverPlaceId(url: string): string | null {
     /\/(?:place|restaurant|cafe|hospital|beauty|accommodation|entry\/place)\/(\d+)/
   );
   return match?.[1] || null;
+}
+
+function buildNaverPlaceSummaryHeaders(sourceUrl: string): HeadersInit {
+  return {
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language": "ko-KR,ko;q=0.9",
+    Referer: sourceUrl,
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  };
+}
+
+async function fetchNaverPlaceSummary(
+  placeId: string,
+  sourceUrl: string
+): Promise<NaverPlaceSummary | null> {
+  const res = await fetch(`${NAVER_PLACE_SUMMARY_URL}/${placeId}`, {
+    headers: buildNaverPlaceSummaryHeaders(sourceUrl),
+    signal: AbortSignal.timeout(PAGE_FETCH_TIMEOUT_MS),
+  });
+
+  if (!res.ok) {
+    throw new Error(`네이버 플레이스 요약 API HTTP ${res.status}`);
+  }
+
+  const payload = (await res.json()) as {
+    data?: {
+      placeDetail?: NaverPlaceSummary;
+    };
+  };
+
+  return payload?.data?.placeDetail || null;
 }
 
 async function fetchNaverPlaceReviews(
@@ -511,6 +642,28 @@ function extractUniqueReviewImages(reviews: NaverPlaceGraphqlReview[]): string[]
   }
 
   return images;
+}
+
+function extractSummaryImageUrls(summary: NaverPlaceSummary | null): string[] {
+  return (summary?.images?.images || [])
+    .map((image) => image.origin?.trim() || "")
+    .filter(Boolean)
+    .slice(0, 4);
+}
+
+function mergeUniqueStrings(...lists: string[][]): string[] {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+
+  for (const list of lists) {
+    for (const item of list) {
+      if (!item || seen.has(item)) continue;
+      seen.add(item);
+      merged.push(item);
+    }
+  }
+
+  return merged;
 }
 
 function buildNaverPlaceKeywordSummary(reviews: NaverPlaceGraphqlReview[]): string {
