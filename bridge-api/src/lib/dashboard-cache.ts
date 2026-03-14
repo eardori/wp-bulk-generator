@@ -29,10 +29,10 @@ function getDashboardCachePaths(): string[] {
     new Set(
       [
         process.env.DASHBOARD_CACHE_PATH,
-        "/root/dashboard-cache.json",
         "/home/ubuntu/wp-bulk-generator/bridge-api/data/dashboard-cache.json",
         "/home/ubuntu/wp-bulk-generator/admin/.cache/dashboard-cache.json",
         "/home/ubuntu/wp-bridge-api/data/dashboard-cache.json",
+        "/root/dashboard-cache.json",
       ].filter((value): value is string => Boolean(value))
     )
   );
@@ -136,15 +136,26 @@ function writeDashboardCacheSync(cache: DashboardCacheFile) {
     2
   );
 
-  for (const path of getDashboardCachePaths()) {
-    const dir = dirname(path);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+  let successCount = 0;
 
-    const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tempPath, payload);
-    renameSync(tempPath, path);
+  for (const path of getDashboardCachePaths()) {
+    try {
+      const dir = dirname(path);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+
+      const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+      writeFileSync(tempPath, payload);
+      renameSync(tempPath, path);
+      successCount += 1;
+    } catch {
+      continue;
+    }
+  }
+
+  if (successCount === 0) {
+    throw new Error("No writable dashboard cache path available.");
   }
 }
 
