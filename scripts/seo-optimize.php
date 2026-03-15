@@ -167,7 +167,28 @@ function cleanup_review_analysis_sections($html) {
   return $html;
 }
 
-function cleanup_existing_post_language($html) {
+function cleanup_review_image_labels($html, $title) {
+  $counter = 0;
+
+  $html = preg_replace_callback(
+    '/실제\s*구매자\s*리뷰\s*사진\s*\d*/u',
+    function () use ($title, &$counter) {
+      $counter++;
+      return $title . ' 관련 이미지 ' . $counter;
+    },
+    $html
+  );
+
+  $html = preg_replace(
+    '/실제\s*사용\s*사진/u',
+    $title . ' 관련 이미지',
+    $html
+  );
+
+  return $html;
+}
+
+function cleanup_existing_post_language($html, $title = '') {
   $html = (string) $html;
 
   $direct_replacements = array(
@@ -176,10 +197,6 @@ function cleanup_existing_post_language($html) {
     '리뷰에 따르면' => '리뷰에서는',
     '리뷰 에 따르면' => '리뷰에서는',
     '예상 가격대' => '가격대',
-    '리뷰어들이 극찬한 메뉴 TOP 3' => '추천 메뉴 TOP 3',
-    '실제 방문자들의 리뷰를 종합해 볼 때, 가장 높은 만족도를 이끌어낸 메뉴는 다음과 같습니다.' => '추천 메뉴는 다음과 같습니다.',
-    '가성비가 뛰어나다는 평이 많습니다.' => '가성비가 괜찮은 편입니다.',
-    '\'음식이 깔끔하고 맛있다\'는 평이 많은 이유를 사이드 메뉴에서도 확인할 수 있습니다.' => '사이드 메뉴 구성도 깔끔한 편입니다.',
   );
 
   $html = str_replace(array_keys($direct_replacements), array_values($direct_replacements), $html);
@@ -198,12 +215,26 @@ function cleanup_existing_post_language($html) {
     '/많은\s*리뷰(?:에서|를\s*보면)\s*반복적으로\s*언급되듯,?\s*/u' => '',
     '/리뷰(?:에서|를\s*보면)\s*반복적으로\s*언급되듯,?\s*/u' => '',
     '/후기(?:에서|를\s*보면)\s*자주\s*언급되듯,?\s*/u' => '',
-    '/많은\s*방문자들이\s*[^.]*?입을\s*모읍니다\./u' => '',
-    '/많은\s*방문객들이\s*[^.]*?(?:극찬하며|평가합니다)\./u' => '',
+    '/리뷰어들이\s*극찬한\s*메뉴\s*TOP\s*3/u' => '추천 메뉴 TOP 3',
+    '/실제\s*방문자들의\s*리뷰를\s*종합해\s*볼\s*때,\s*가장\s*높은\s*만족도를\s*이끌어낸\s*메뉴는\s*다음과\s*같습니다\./u' => '추천 메뉴는 다음과 같습니다.',
+    '/가성비가\s*뛰어나다는\s*평이\s*많습니다\./u' => '가성비가 괜찮은 편입니다.',
+    '/[\'‘’"]음식이\s*깔끔하고\s*맛있다[\'‘’"]는\s*평이\s*많은\s*이유를\s*사이드\s*메뉴에서도\s*확인할\s*수\s*있습니다\./u' => '사이드 메뉴 구성도 깔끔한 편입니다.',
+    '/많은\s*방문자들이\s*공통적으로[\s\S]{0,160}?과연\s*그럴\s*만했습니다\./u' => '고급스럽고 차분한 분위기가 돋보입니다.',
+    '/많은\s*방문객들이\s*갈비탕을\s*칭찬하며,\s*가성비\s*좋은\s*선택임을\s*강조합니다\./u' => '갈비탕은 가성비 좋은 선택으로 꼽힙니다.',
+    '/실제로\s*많은\s*방문객들이\s*점심\s*특선을\s*이용하고\s*만족감을\s*표현했습니다\./u' => '점심 특선 만족도는 좋은 편입니다.',
+    '/많은\s*방문객들이\s*<strong>고기의\s*질<\/strong>과\s*<strong>음식\s*맛<\/strong>에\s*만족감을\s*표현했으며,\s*특히\s*<strong>양념갈비<\/strong>와\s*<strong>마늘\s*안심<\/strong>에\s*대한\s*칭찬이\s*많았습니다\./u' => '고기의 질이 좋고 양념갈비와 마늘 안심이 대표 메뉴로 꼽힙니다.',
+    '/한\s*리뷰어는\s*[\"“”][^\"“”]{0,220}[\"“”][^.]{0,120}\./u' => '',
+    '/리뷰어는\s*[\"“”][^\"“”]{0,220}[\"“”][^.]{0,120}\./u' => '',
+    '/많은\s*방문자들이\s*[\'‘’“”][^\'‘’“”]+[\'‘’“”]\s*고\s*입을\s*모읍니다\./u' => '',
+    '/많은\s*방문객들이\s*[\'‘’“”][^\'‘’“”]+[\'‘’“”][^.]*?평가합니다\./u' => '',
+    '/많은\s*방문객들이\s*[\'‘’“”][^\'‘’“”]+[\'‘’“”][^.]*?극찬하며[^.]*?평가합니다\./u' => '',
+    '/많은\s*방문(?:자|객)들이[^.]{0,220}\./u' => '',
     '/많은\s*분들이\s*[^.]*?표현할\s*정도로\s*/u' => '',
     '/점심[’\'"]?에\s*언급되는\s*리뷰가\s*많으며,\s*/u' => '',
     '/리뷰에서\s*특별히\s*[‘\'"]?피해야\s*할\s*메뉴[’\'"]?\s*에\s*대한\s*언급은\s*없었습니다\./u' => '메뉴 선택 부담이 적은 편입니다.',
     '/후기가\s*많아\s*메뉴\s*선택에\s*대한\s*부담이\s*적습니다\./u' => '메뉴 선택 부담이 적은 편입니다.',
+    '/후기가\s*많아[^<.]*\./u' => '메뉴 선택 부담이 적은 편입니다.',
+    '/평이\s*많습니다\./u' => '입니다.',
     '/추정/u' => '',
     '/현장 기준,\s*/u' => '',
     '/[（(]\s*현장\s*기준\s*[)）]/u' => '',
@@ -259,6 +290,9 @@ function cleanup_existing_post_language($html) {
   $html = cleanup_uncertain_place_info_rows($html);
   $html = cleanup_uncertain_faq_blocks($html);
   $html = cleanup_review_analysis_sections($html);
+  if ($title !== '') {
+    $html = cleanup_review_image_labels($html, $title);
+  }
 
   return cleanup_empty_html_blocks($html);
 }
@@ -569,7 +603,8 @@ foreach ($posts as $post) {
   $original_content = (string) $post->post_content;
   $content_without_schemas = strip_json_ld_scripts($original_content);
   $content = cleanup_existing_post_language(
-    improve_image_alts(strip_review_reference_markers($content_without_schemas), $title)
+    improve_image_alts(strip_review_reference_markers($content_without_schemas), $title),
+    $title
   );
 
   $excerpt = wp_strip_all_tags($post->post_excerpt ?: wp_trim_words($content, 30, ''));
