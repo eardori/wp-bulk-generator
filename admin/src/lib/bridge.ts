@@ -4,6 +4,10 @@ const BRIDGE_URL = process.env.BRIDGE_API_URL || "";
 const BRIDGE_KEY = process.env.BRIDGE_API_KEY || "";
 const JWT_SECRET = process.env.BRIDGE_JWT_SECRET || "";
 
+function getBridgeJwtSigningSecret(): string {
+  return JWT_SECRET || BRIDGE_KEY;
+}
+
 /**
  * 서버사이드: Vercel API route → Bridge API 호출
  */
@@ -67,7 +71,12 @@ export function createBridgeToken(
   payload: Record<string, unknown>,
   expiresIn = "15m"
 ): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn } as jwt.SignOptions);
+  const secret = getBridgeJwtSigningSecret();
+  if (!secret) {
+    throw new Error("Bridge token signing secret is not configured");
+  }
+
+  return jwt.sign(payload, secret, { expiresIn } as jwt.SignOptions);
 }
 
 /**

@@ -4,6 +4,33 @@ import type { FastifyRequest, FastifyReply } from "fastify";
 const API_KEY = process.env.BRIDGE_API_KEY || "";
 const JWT_SECRET = process.env.BRIDGE_JWT_SECRET || "";
 
+function getJwtSecrets(): string[] {
+  return [...new Set([JWT_SECRET, API_KEY].filter(Boolean))];
+}
+
+function verifyJwtWithFallback(token: string) {
+  let lastError: unknown;
+
+  for (const secret of getJwtSecrets()) {
+    try {
+      return jwt.verify(token, secret);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error("JWT secret is not configured");
+}
+
+function signJwtWithFallback(payload: object, expiresIn = "15m"): string {
+  const [secret] = getJwtSecrets();
+  if (!secret) {
+    throw new Error("JWT secret is not configured");
+  }
+
+  return jwt.sign(payload, secret, { expiresIn } as jwt.SignOptions);
+}
+
 const PUBLIC_PATHS = ["/health"];
 const JWT_ROUTE_PREFIXES: Record<string, string[]> = {
   dashboard: ["/dashboard"],
@@ -41,7 +68,7 @@ export function verifyApiKey(
 
   if (jwtToken) {
     try {
-      const decoded = jwt.verify(jwtToken, JWT_SECRET);
+      const decoded = verifyJwtWithFallback(jwtToken);
       const pathname = req.url.split("?")[0];
       const route =
         decoded && typeof decoded === "object" && "route" in decoded
@@ -65,9 +92,9 @@ export function verifyApiKey(
 }
 
 export function signToken(payload: object, expiresIn = "15m"): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn } as jwt.SignOptions);
+  return signJwtWithFallback(payload, expiresIn);
 }
 
 export function verifyToken(token: string) {
-  return jwt.verify(token, JWT_SECRET);
+  return verifyJwtWithFallback(token);
 }
