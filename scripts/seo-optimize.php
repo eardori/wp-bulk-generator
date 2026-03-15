@@ -176,6 +176,10 @@ function cleanup_existing_post_language($html) {
     '리뷰에 따르면' => '리뷰에서는',
     '리뷰 에 따르면' => '리뷰에서는',
     '예상 가격대' => '가격대',
+    '리뷰어들이 극찬한 메뉴 TOP 3' => '추천 메뉴 TOP 3',
+    '실제 방문자들의 리뷰를 종합해 볼 때, 가장 높은 만족도를 이끌어낸 메뉴는 다음과 같습니다.' => '추천 메뉴는 다음과 같습니다.',
+    '가성비가 뛰어나다는 평이 많습니다.' => '가성비가 괜찮은 편입니다.',
+    '\'음식이 깔끔하고 맛있다\'는 평이 많은 이유를 사이드 메뉴에서도 확인할 수 있습니다.' => '사이드 메뉴 구성도 깔끔한 편입니다.',
   );
 
   $html = str_replace(array_keys($direct_replacements), array_values($direct_replacements), $html);
@@ -194,6 +198,12 @@ function cleanup_existing_post_language($html) {
     '/많은\s*리뷰(?:에서|를\s*보면)\s*반복적으로\s*언급되듯,?\s*/u' => '',
     '/리뷰(?:에서|를\s*보면)\s*반복적으로\s*언급되듯,?\s*/u' => '',
     '/후기(?:에서|를\s*보면)\s*자주\s*언급되듯,?\s*/u' => '',
+    '/많은\s*방문자들이\s*[^.]*?입을\s*모읍니다\./u' => '',
+    '/많은\s*방문객들이\s*[^.]*?(?:극찬하며|평가합니다)\./u' => '',
+    '/많은\s*분들이\s*[^.]*?표현할\s*정도로\s*/u' => '',
+    '/점심[’\'"]?에\s*언급되는\s*리뷰가\s*많으며,\s*/u' => '',
+    '/리뷰에서\s*특별히\s*[‘\'"]?피해야\s*할\s*메뉴[’\'"]?\s*에\s*대한\s*언급은\s*없었습니다\./u' => '메뉴 선택 부담이 적은 편입니다.',
+    '/후기가\s*많아\s*메뉴\s*선택에\s*대한\s*부담이\s*적습니다\./u' => '메뉴 선택 부담이 적은 편입니다.',
     '/추정/u' => '',
     '/현장 기준,\s*/u' => '',
     '/[（(]\s*현장\s*기준\s*[)）]/u' => '',
@@ -236,6 +246,7 @@ function cleanup_existing_post_language($html) {
 
   $block_removals = array(
     '/<p[^>]*>[\s\S]*?가능할\s*수\s*있(?:습니다|어요)[\s\S]*?<\/p>/iu',
+    '/<p[^>]*>[\s\S]*?실제\s*방문자들의\s*리뷰[\s\S]*?<\/p>/iu',
     '/<li[^>]*>[\s\S]*?(?:확인 필요|문의 필요|방문 전 확인|방문 전 문의|직접 확인 필요|가게 직접 확인 필요)[\s\S]*?<\/li>/iu',
     '/<p[^>]*>\s*<strong>\s*(?:전화번호|전화|주차|예약)\s*:\s*<\/strong>[\s\S]*?<\/p>/iu',
     '/<p[^>]*>\s*<strong>\s*영업시간\s*:\s*<\/strong>[\s\S]*?(?:확인 필요|문의 필요)[\s\S]*?<\/p>/iu',
@@ -265,6 +276,7 @@ function improve_image_alts($html, $title) {
 
     $is_generic = $current_alt === ''
       || $current_alt === '실제 구매자 리뷰 사진'
+      || mb_strpos($current_alt, '실제 구매자 리뷰 사진') !== false
       || $current_alt === 'image'
       || mb_strlen($current_alt) < 3;
 
@@ -284,8 +296,8 @@ function improve_image_alts($html, $title) {
   }, $html);
 
   return preg_replace(
-    '/<figcaption[^>]*>\s*(실제 구매자 리뷰 사진)?\s*<\/figcaption>/i',
-    '<figcaption>' . esc_html($title . ' 실제 사용 사진') . '</figcaption>',
+    '/<figcaption[^>]*>\s*(?:[^<]*실제\s*(?:구매자\s*리뷰\s*사진|사용\s*사진))\s*<\/figcaption>/iu',
+    '<figcaption>' . esc_html($title . ' 관련 이미지') . '</figcaption>',
     $html
   );
 }
