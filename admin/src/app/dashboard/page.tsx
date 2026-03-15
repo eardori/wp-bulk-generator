@@ -20,6 +20,8 @@ type SiteCredential = {
   admin_user: string;
   app_pass: string;
   persona?: Persona;
+  server_id?: string;
+  server_host?: string;
 };
 
 type SiteGroup = {
@@ -88,6 +90,14 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
 }
 
+function getServerId(site: SiteCredential): "primary" | "secondary" {
+  return site.server_id === "secondary" ? "secondary" : "primary";
+}
+
+function getServerLabel(serverId: "primary" | "secondary"): string {
+  return serverId === "secondary" ? "새 서버" : "기존 서버";
+}
+
 // ── Spinner ────────────────────────────────────────────────────────
 
 function Spinner({ size = 4 }: { size?: number }) {
@@ -132,6 +142,8 @@ function SiteCard({
   const loaded = postData?.loaded ?? false;
   const hasError = postData?.error;
   const cacheMissing = postData?.cacheMissing;
+  const serverId = getServerId(site);
+  const serverLabel = getServerLabel(serverId);
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden hover:border-gray-700 transition-all">
@@ -144,6 +156,15 @@ function SiteCard({
               <h3 className="text-sm font-semibold text-white truncate">
                 {site.title || site.slug}
               </h3>
+              <span
+                className={`px-1.5 py-0.5 text-[10px] rounded flex-shrink-0 ${
+                  serverId === "secondary"
+                    ? "bg-cyan-500/15 text-cyan-400"
+                    : "bg-emerald-500/15 text-emerald-400"
+                }`}
+              >
+                {serverLabel}
+              </span>
             </div>
             <p className="text-xs text-gray-500 mt-0.5 truncate ml-4">{site.domain}</p>
           </div>
@@ -287,6 +308,7 @@ export default function DashboardPage() {
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [siteFilter, setSiteFilter] = useState("");
   const [groupFilter, setGroupFilter] = useState<string>("all");
+  const [serverFilter, setServerFilter] = useState<"all" | "primary" | "secondary">("all");
 
   const load = useCallback(() => {
     setLoading(true);
@@ -345,6 +367,8 @@ export default function DashboardPage() {
   );
   const loadedCount = Object.keys(postMap).length;
   const missingCacheCount = Object.values(postMap).filter((data) => data.cacheMissing).length;
+  const primarySitesCount = sites.filter((site) => getServerId(site) === "primary").length;
+  const secondarySitesCount = sites.filter((site) => getServerId(site) === "secondary").length;
 
   // Map slug → group names
   const slugToGroups: Record<string, string[]> = {};
@@ -369,7 +393,10 @@ export default function DashboardPage() {
       (groupFilter === "ungrouped" && !(slugToGroups[s.slug]?.length > 0)) ||
       groups.find((g) => g.id === groupFilter)?.slugs.includes(s.slug);
 
-    return matchText && matchGroup;
+    const matchServer =
+      serverFilter === "all" || getServerId(s) === serverFilter;
+
+    return matchText && matchGroup && matchServer;
   });
 
   // ── Render ────────────────────────────────────────────────────
@@ -577,6 +604,26 @@ export default function DashboardPage() {
             )}
           </h3>
 
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { id: "all", label: "전체", count: sites.length },
+              { id: "primary", label: "기존 서버", count: primarySitesCount },
+              { id: "secondary", label: "새 서버", count: secondarySitesCount },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setServerFilter(tab.id as "all" | "primary" | "secondary")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  serverFilter === tab.id
+                    ? "bg-emerald-500 text-white"
+                    : "bg-gray-800 border border-gray-700 text-gray-300 hover:border-gray-600"
+                }`}
+              >
+                {tab.label} {loading ? "" : `${tab.count}개`}
+              </button>
+            ))}
+          </div>
+
           {/* Filters */}
           <div className="flex items-center gap-2 flex-1">
             {/* Group filter */}
@@ -627,7 +674,9 @@ export default function DashboardPage() {
           <>
             <p className="text-xs text-gray-600 mb-3">
               {filteredSites.length}개 사이트
-              {siteFilter || groupFilter !== "all" ? ` (필터 적용됨)` : ""}
+              {siteFilter || groupFilter !== "all" || serverFilter !== "all"
+                ? ` (필터 적용됨)`
+                : ""}
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {filteredSites.map((site) => (
