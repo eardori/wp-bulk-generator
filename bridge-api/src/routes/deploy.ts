@@ -85,7 +85,10 @@ function readExistingSites(): DeployConfig[] {
     if (existsSync(CREDS_PATH)) {
       return JSON.parse(readFileSync(CREDS_PATH, "utf-8"));
     }
-    const raw = execSync(`sudo cat ${CREDS_PATH}`, { timeout: 10000 }).toString();
+    const raw = execSync(
+      `sudo test -f ${shellQuote(CREDS_PATH)} && sudo cat ${shellQuote(CREDS_PATH)} || printf "[]"`,
+      { timeout: 10000 }
+    ).toString();
     return JSON.parse(raw);
   } catch { return []; }
 }
@@ -95,7 +98,10 @@ function readExistingConfigs(): DeployConfig[] {
     if (existsSync(CONFIG_PATH)) {
       return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
     }
-    const raw = execSync(`sudo cat ${CONFIG_PATH}`, { timeout: 10000 }).toString();
+    const raw = execSync(
+      `sudo test -f ${shellQuote(CONFIG_PATH)} && sudo cat ${shellQuote(CONFIG_PATH)} || printf "[]"`,
+      { timeout: 10000 }
+    ).toString();
     return JSON.parse(raw);
   } catch { return []; }
 }
@@ -392,6 +398,25 @@ function summarizeDeployCredentials(
   };
 }
 
+function appendChunkLines(
+  pending: string,
+  data: string | Buffer,
+  onLine: (line: string) => void
+): string {
+  const text = typeof data === "string" ? data : data.toString("utf8");
+  const combined = pending + text;
+  const lines = combined.split(/\r?\n/);
+  const remainder = lines.pop() ?? "";
+
+  for (const line of lines) {
+    if (line) {
+      onLine(line);
+    }
+  }
+
+  return remainder;
+}
+
 export async function deployRoutes(app: FastifyInstance) {
   app.post("/deploy", async (req, reply) => {
     const { configs } = req.body as { configs: DeployConfig[] };
@@ -487,78 +512,89 @@ export async function deployRoutes(app: FastifyInstance) {
       const { child, cleanup } = createDeployProcess(deployTarget, deployableConfigs);
       deployCleanup = cleanup;
 
-      child.stdout?.on("data", (data: string) => {
-        const lines = data.split("\n").filter(Boolean);
-        for (const line of lines) {
-          const marker = parseDeployMarker(line);
-          if (marker) {
-            if (marker.type === "site_start") {
-              send({
-                type: "progress",
-                progress: completed,
-                total: configs.length,
-                currentSite: marker.title || marker.slug,
-                message: `[${completed + marker.index}/${configs.length}] ${marker.title || marker.slug} 설치 중...`,
-              });
-              continue;
-            }
+      let pendingStdout = "";
+      let pendingStderr = "";
 
-            if (marker.type === "site_retry") {
-              send({
-                type: "log",
-                message: `${marker.slug} 재시도 (${marker.attempt}/${marker.maxAttempts})${marker.reason ? ` - ${marker.reason}` : ""}`,
-              });
-              continue;
-            }
-
-            if (marker.type === "site_success") {
-              completed += 1;
-              successCount += 1;
-              successfulSlugs.add(marker.slug);
-              send({
-                type: "progress",
-                progress: completed,
-                total: configs.length,
-                currentSite: marker.title || marker.slug,
-                message: `${marker.title || marker.slug} 설치 완료 (${completed}/${configs.length})`,
-              });
-              continue;
-            }
-
-            if (marker.type === "site_failure") {
-              completed += 1;
-              failureCount += 1;
-              failedSites.push({ slug: marker.slug, reason: marker.reason });
-              send({
-                type: "progress",
-                progress: completed,
-                total: configs.length,
-                currentSite: marker.slug,
-                message: `${marker.slug} 설치 실패, 다음 사이트로 진행합니다. (${completed}/${configs.length})`,
-              });
-              continue;
-            }
-
-            if (marker.type === "summary") {
-              successCount = Math.max(successCount, marker.successCount);
-              failureCount = Math.max(failureCount, conflicts.length + marker.failureCount);
-              continue;
-            }
-          }
-
+      const handleStdoutLine = (line: string) => {
+        const marker = parseDeployMarker(line);
+        if (!marker) {
           send({ type: "log", message: line });
+          return;
         }
+
+        if (marker.type === "site_start") {
+          send({
+            type: "progress",
+            progress: completed,
+            total: configs.length,
+            currentSite: marker.title || marker.slug,
+            message: `[${completed + marker.index}/${configs.length}] ${marker.title || marker.slug} 설치 중...`,
+          });
+          return;
+        }
+
+        if (marker.type === "site_retry") {
+          send({
+            type: "log",
+            message: `${marker.slug} 재시도 (${marker.attempt}/${marker.maxAttempts})${marker.reason ? ` - ${marker.reason}` : ""}`,
+          });
+          return;
+        }
+
+        if (marker.type === "site_success") {
+          completed += 1;
+          successCount += 1;
+          successfulSlugs.add(marker.slug);
+          send({
+            type: "progress",
+            progress: completed,
+            total: configs.length,
+            currentSite: marker.title || marker.slug,
+            message: `${marker.title || marker.slug} 설치 완료 (${completed}/${configs.length})`,
+          });
+          return;
+        }
+
+        if (marker.type === "site_failure") {
+          completed += 1;
+          failureCount += 1;
+          failedSites.push({ slug: marker.slug, reason: marker.reason });
+          send({
+            type: "progress",
+            progress: completed,
+            total: configs.length,
+            currentSite: marker.slug,
+            message: `${marker.slug} 설치 실패, 다음 사이트로 진행합니다. (${completed}/${configs.length})`,
+          });
+          return;
+        }
+
+        if (marker.type === "summary") {
+          successCount = Math.max(successCount, marker.successCount);
+          failureCount = Math.max(failureCount, conflicts.length + marker.failureCount);
+        }
+      };
+
+      child.stdout?.on("data", (data) => {
+        pendingStdout = appendChunkLines(pendingStdout, data, handleStdoutLine);
       });
 
-      child.stderr?.on("data", (data: string) => {
-        const lines = data.split("\n").filter(Boolean);
-        for (const line of lines) {
+      child.stderr?.on("data", (data) => {
+        pendingStderr = appendChunkLines(pendingStderr, data, (line) => {
           send({ type: "log", message: `[stderr] ${line}` });
-        }
+        });
       });
 
       await new Promise<void>((resolve, reject) => {
         child.on("close", (code) => {
+          if (pendingStdout) {
+            handleStdoutLine(pendingStdout);
+            pendingStdout = "";
+          }
+          if (pendingStderr) {
+            send({ type: "log", message: `[stderr] ${pendingStderr}` });
+            pendingStderr = "";
+          }
           if (code === 0) resolve();
           else reject(new Error(`배포 스크립트 종료 코드: ${code}`));
         });
