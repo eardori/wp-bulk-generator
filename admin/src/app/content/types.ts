@@ -68,6 +68,9 @@ export type SiteCredential = {
   admin_user: string;
   admin_pass: string;
   app_pass: string;
+  server_id?: string;
+  server_host?: string;
+  server_user?: string;
   persona?: {
     name: string;
     age: number;

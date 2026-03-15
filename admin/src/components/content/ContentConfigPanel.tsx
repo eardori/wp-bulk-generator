@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SiteCredential, ContentArticleConfig } from "@/app/content/types";
 
 type Props = {
@@ -27,14 +27,58 @@ function summarizePrompt(prompt: string): string {
   return normalized.length > 140 ? `${normalized.slice(0, 140)}...` : normalized;
 }
 
+function getServerGroupId(site: SiteCredential): string {
+  const serverId = site.server_id?.trim();
+  if (serverId) return serverId;
+  return "primary";
+}
+
+function getServerGroupLabel(serverId: string): string {
+  if (serverId === "primary") return "기존 서버";
+  if (serverId === "secondary") return "새 서버";
+  return serverId;
+}
+
 export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, onBack }: Props) {
-  const [configs, setConfigs] = useState<ContentArticleConfig[]>(
-    sites.map((s) => ({ siteSlug: s.slug, count: 1, enabled: true }))
+  const [configs, setConfigs] = useState<ContentArticleConfig[]>([]);
+  const [activeServerTab, setActiveServerTab] = useState("all");
+
+  useEffect(() => {
+    setConfigs((prev) => {
+      const prevMap = new Map(prev.map((config) => [config.siteSlug, config]));
+      return sites.map((site) => prevMap.get(site.slug) || {
+        siteSlug: site.slug,
+        count: 1,
+        enabled: true,
+      });
+    });
+  }, [sites]);
+
+  const serverTabs = [
+    { id: "all", label: "전체 사이트", count: sites.length },
+    ...Array.from(new Set(sites.map((site) => getServerGroupId(site)))).map((serverId) => ({
+      id: serverId,
+      label: getServerGroupLabel(serverId),
+      count: sites.filter((site) => getServerGroupId(site) === serverId).length,
+    })),
+  ];
+
+  useEffect(() => {
+    if (!serverTabs.some((tab) => tab.id === activeServerTab)) {
+      setActiveServerTab("all");
+    }
+  }, [activeServerTab, serverTabs]);
+
+  const filteredSites = sites.filter((site) =>
+    activeServerTab === "all" ? true : getServerGroupId(site) === activeServerTab
   );
+  const filteredSiteSlugs = new Set(filteredSites.map((site) => site.slug));
 
   const totalArticles = configs.filter((c) => c.enabled).reduce((sum, c) => sum + c.count, 0);
   const enabledCount = configs.filter((c) => c.enabled).length;
-  const allEnabled = configs.length > 0 && configs.every((c) => c.enabled);
+  const visibleConfigs = configs.filter((config) => filteredSiteSlugs.has(config.siteSlug));
+  const visibleEnabledCount = visibleConfigs.filter((config) => config.enabled).length;
+  const allEnabledInView = visibleConfigs.length > 0 && visibleConfigs.every((config) => config.enabled);
 
   const toggleEnabled = (slug: string) =>
     setConfigs((prev) => prev.map((c) => (c.siteSlug === slug ? { ...c, enabled: !c.enabled } : c)));
@@ -42,12 +86,24 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
   const setCount = (slug: string, count: number) =>
     setConfigs((prev) => prev.map((c) => (c.siteSlug === slug ? { ...c, count } : c)));
 
-  // 활성화된 전체 사이트 일괄 글 수 설정
+  // 현재 탭에서 보이는 활성 사이트만 일괄 글 수 설정
   const setBulkCount = (count: number) =>
-    setConfigs((prev) => prev.map((c) => (c.enabled ? { ...c, count } : c)));
+    setConfigs((prev) =>
+      prev.map((config) =>
+        filteredSiteSlugs.has(config.siteSlug) && config.enabled
+          ? { ...config, count }
+          : config
+      )
+    );
 
   const toggleAll = () =>
-    setConfigs((prev) => prev.map((c) => ({ ...c, enabled: !allEnabled })));
+    setConfigs((prev) =>
+      prev.map((config) =>
+        filteredSiteSlugs.has(config.siteSlug)
+          ? { ...config, enabled: !allEnabledInView }
+          : config
+      )
+    );
 
   const handleGenerate = () => {
     const active = configs.filter((c) => c.enabled);
@@ -84,9 +140,31 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
         <p className="text-sm text-gray-300 leading-6">{summarizePrompt(contentPrompt)}</p>
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        {serverTabs.map((tab) => {
+          const isActive = activeServerTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveServerTab(tab.id)}
+              className={`px-3 py-2 rounded-xl text-sm border transition-all ${
+                isActive
+                  ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                  : "bg-gray-800/60 border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600"
+              }`}
+            >
+              {tab.label}
+              <span className="ml-1.5 text-xs opacity-80">{tab.count}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* ── 일괄 설정 바 ── */}
       <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-gray-800 border border-gray-700">
-        <span className="text-xs text-gray-400 whitespace-nowrap">전체 일괄:</span>
+        <span className="text-xs text-gray-400 whitespace-nowrap">
+          {activeServerTab === "all" ? "전체 일괄:" : `${getServerGroupLabel(activeServerTab)} 일괄:`}
+        </span>
         <div className="flex items-center gap-1.5">
           {COUNT_OPTIONS.map((n) => (
             <button
@@ -103,20 +181,24 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
           onClick={toggleAll}
           className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors whitespace-nowrap"
         >
-          {allEnabled ? "전체 해제" : "전체 선택"}
+          {allEnabledInView ? "탭 전체 해제" : "탭 전체 선택"}
         </button>
         <span className="text-xs text-gray-500 whitespace-nowrap">
-          {enabledCount}/{sites.length}개 사이트
+          전체 {enabledCount}/{sites.length}개
+        </span>
+        <span className="text-xs text-gray-600 whitespace-nowrap hidden sm:inline">
+          현재 탭 {visibleEnabledCount}/{filteredSites.length}개
         </span>
       </div>
 
       {/* ── 사이트 목록 (컴팩트 테이블) ── */}
-      {sites.length === 0 ? (
+      {filteredSites.length === 0 ? (
         <div className="text-center py-8 text-gray-500">배포된 사이트가 없습니다.</div>
       ) : (
         <div className="space-y-1 max-h-[420px] overflow-y-auto pr-1">
-          {sites.map((site) => {
-            const config = configs.find((c) => c.siteSlug === site.slug)!;
+          {filteredSites.map((site) => {
+            const config = configs.find((c) => c.siteSlug === site.slug);
+            if (!config) return null;
             return (
               <div
                 key={site.slug}
@@ -147,6 +229,9 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
                       {site.persona.tone}
                     </span>
                   )}
+                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/70 text-gray-300 flex-shrink-0">
+                    {getServerGroupLabel(getServerGroupId(site))}
+                  </span>
                 </div>
 
                 {config.enabled && (

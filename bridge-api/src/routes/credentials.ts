@@ -3,6 +3,11 @@ import { dirname } from "path";
 import type { FastifyInstance } from "fastify";
 import { isExcludedSiteRecord } from "../lib/excluded-sites.js";
 import { removeDashboardSiteCaches } from "../lib/dashboard-cache.js";
+import {
+  getPrimaryServerTarget,
+  getSecondaryServerTarget,
+} from "../lib/server-targets.js";
+import { execSsh, shellQuote } from "../lib/ssh.js";
 
 const CREDS_PATH =
   process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
@@ -77,19 +82,111 @@ function uniquePaths(primary: string, mirrors: string[]): string[] {
   return Array.from(new Set([primary, ...mirrors].filter(Boolean)));
 }
 
+function tryReadRemoteJson(path: string): unknown {
+  const secondary = getSecondaryServerTarget();
+  if (!secondary) {
+    return [];
+  }
+
+  try {
+    const raw = execSsh(
+      secondary,
+      `[ -f ${shellQuote(path)} ] && cat ${shellQuote(path)} || printf '[]'`,
+      15000
+    );
+    return JSON.parse(raw || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function resolveServerIdentity(record: Record<string, unknown>, fallback: {
+  id: string;
+  host?: string;
+  user?: string;
+}) {
+  return {
+    server_id:
+      typeof record.server_id === "string" && record.server_id.trim()
+        ? record.server_id.trim()
+        : fallback.id,
+    server_host:
+      typeof record.server_host === "string" && record.server_host.trim()
+        ? record.server_host.trim()
+        : fallback.host || "",
+    server_user:
+      typeof record.server_user === "string" && record.server_user.trim()
+        ? record.server_user.trim()
+        : fallback.user || "",
+  };
+}
+
+function recordKey(record: Record<string, unknown>): string {
+  const slug = normalizeText(record.slug ?? record.site_slug);
+  const domain = normalizeText(record.domain);
+  return slug || domain || JSON.stringify(record);
+}
+
+function mergeByRecordKey(records: Record<string, unknown>[]) {
+  const merged = new Map<string, Record<string, unknown>>();
+
+  for (const record of records) {
+    const key = recordKey(record);
+    if (!key) continue;
+
+    const prev = merged.get(key) || {};
+    merged.set(key, {
+      ...prev,
+      ...record,
+    });
+  }
+
+  return Array.from(merged.values());
+}
+
 export async function credentialsRoutes(app: FastifyInstance) {
   // 사이트 자격증명 + 페르소나 병합
   app.get("/credentials", async () => {
-    const credentials = normalizeRecords(tryReadJson(CREDS_PATH), "sites");
-    const configs = normalizeRecords(tryReadJson(CONFIG_PATH), "configs");
+    const primary = getPrimaryServerTarget();
+    const secondary = getSecondaryServerTarget();
+
+    const credentials = mergeByRecordKey([
+      ...normalizeRecords(tryReadJson(CREDS_PATH), "sites").map((record) => ({
+        ...record,
+        ...resolveServerIdentity(record, primary),
+      })),
+      ...(
+        secondary
+          ? normalizeRecords(tryReadRemoteJson(secondary.credentialsPath), "sites").map((record) => ({
+              ...record,
+              ...resolveServerIdentity(record, secondary),
+            }))
+          : []
+      ),
+    ]);
+    const configs = mergeByRecordKey([
+      ...normalizeRecords(tryReadJson(CONFIG_PATH), "configs").map((record) => ({
+        ...record,
+        ...resolveServerIdentity(record, primary),
+      })),
+      ...(
+        secondary
+          ? normalizeRecords(tryReadRemoteJson(secondary.configPath), "configs").map((record) => ({
+              ...record,
+              ...resolveServerIdentity(record, secondary),
+            }))
+          : []
+      ),
+    ]);
 
     const configMap = new Map<string, Record<string, unknown>>();
     for (const c of configs) {
-      if (c.site_slug) configMap.set(c.site_slug as string, c);
+      const key = recordKey(c);
+      if (key) configMap.set(key, c);
     }
 
     const merged = credentials.map((cred) => {
-      const config = configMap.get(cred.slug as string);
+      const config = configMap.get(recordKey(cred));
       return {
         ...cred,
         persona: config?.persona || null,
@@ -102,8 +199,22 @@ export async function credentialsRoutes(app: FastifyInstance) {
 
   // 사이트 설정만 반환
   app.get("/credentials/config", async () => {
-    const configs = normalizeRecords(tryReadJson(CONFIG_PATH), "configs")
-      .filter((config) => !isExcludedSiteRecord(config));
+    const primary = getPrimaryServerTarget();
+    const secondary = getSecondaryServerTarget();
+    const configs = mergeByRecordKey([
+      ...normalizeRecords(tryReadJson(CONFIG_PATH), "configs").map((record) => ({
+        ...record,
+        ...resolveServerIdentity(record, primary),
+      })),
+      ...(
+        secondary
+          ? normalizeRecords(tryReadRemoteJson(secondary.configPath), "configs").map((record) => ({
+              ...record,
+              ...resolveServerIdentity(record, secondary),
+            }))
+          : []
+      ),
+    ]).filter((config) => !isExcludedSiteRecord(config));
     return { configs };
   });
 
