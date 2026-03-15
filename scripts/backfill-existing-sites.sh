@@ -3,8 +3,12 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+APP_FILE_OWNER="${APP_FILE_OWNER:-$(stat -c '%U:%G' "$REPO_ROOT" 2>/dev/null || echo root:root)}"
+
 CREDS_FILE="/root/wp-sites-credentials.json"
-APP_CACHE_DIR="/home/ubuntu/wp-bulk-generator/admin/.cache"
+APP_CACHE_DIR="${APP_CACHE_DIR:-$REPO_ROOT/admin/.cache}"
 APP_CREDS_FILE="$APP_CACHE_DIR/sites-credentials.json"
 ALLMYREVIEW_CERT_NAME="allmyreview-sites"
 ALLMYREVIEW_CERT_DIR="/etc/letsencrypt/live/$ALLMYREVIEW_CERT_NAME"
@@ -55,7 +59,7 @@ mkdir -p "$APP_CACHE_DIR"
 
 sync_cache() {
   cp "$CREDS_FILE" "$APP_CREDS_FILE" 2>/dev/null || true
-  chown ubuntu:ubuntu "$APP_CREDS_FILE" 2>/dev/null || true
+  chown "$APP_FILE_OWNER" "$APP_CREDS_FILE" 2>/dev/null || true
 }
 
 wp_try() {

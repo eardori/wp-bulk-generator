@@ -1,18 +1,30 @@
-import { exec, execSync } from "child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { execSync, spawn } from "child_process";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
 import type { FastifyInstance } from "fastify";
+import { tmpdir } from "os";
+import { dirname, join } from "path";
 import { setupSSE } from "../utils/sse.js";
 import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
 import { seedDashboardSiteCaches } from "../lib/dashboard-cache.js";
+import {
+  getDefaultDeployTarget,
+  getPrimaryServerTarget,
+  isRemoteTarget,
+  type ServerTarget,
+} from "../lib/server-targets.js";
+import { execSsh, scpToTarget, shellQuote, spawnSsh } from "../lib/ssh.js";
 
 const CREDS_PATH =
   process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
+const CONFIG_PATH =
+  process.env.CONFIG_PATH || "/root/wp-sites-config.json";
 const DEPLOY_SCRIPT =
   process.env.DEPLOY_SCRIPT_PATH || "/home/ubuntu/wp-bulk-generator/scripts/deploy-wp-sites.sh";
 
 type DeployConfig = {
   site_slug?: string;
   domain?: string;
+  server_id?: string;
 };
 
 type DeployFailure = {
@@ -27,6 +39,14 @@ type StoredCredential = {
   url?: string;
   admin_user?: string;
   admin_pass?: string;
+  app_pass?: string;
+  site_dir?: string;
+  server_id?: string;
+  server_host?: string;
+  server_user?: string;
+  server_key_path?: string;
+  server_site_root?: string;
+  server_repo_root?: string;
 };
 
 type DeployCredentialsSummary = {
@@ -68,6 +88,188 @@ function readExistingSites(): DeployConfig[] {
     const raw = execSync(`sudo cat ${CREDS_PATH}`, { timeout: 10000 }).toString();
     return JSON.parse(raw);
   } catch { return []; }
+}
+
+function readExistingConfigs(): DeployConfig[] {
+  try {
+    if (existsSync(CONFIG_PATH)) {
+      return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+    }
+    const raw = execSync(`sudo cat ${CONFIG_PATH}`, { timeout: 10000 }).toString();
+    return JSON.parse(raw);
+  } catch { return []; }
+}
+
+function writeJson(path: string, data: unknown) {
+  const dir = dirname(path);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(path, JSON.stringify(data, null, 2));
+}
+
+function getCredentialKey(site: DeployConfig): string {
+  return normalizeSlug(site.site_slug) || normalizeSlug((site as StoredCredential).slug) || normalizeDomain(site.domain);
+}
+
+function mergeCredentials(
+  existing: StoredCredential[],
+  incoming: StoredCredential[]
+): StoredCredential[] {
+  const merged = new Map<string, StoredCredential>();
+
+  for (const item of existing) {
+    const key = getCredentialKey(item);
+    if (!key) continue;
+    merged.set(key, item);
+  }
+
+  for (const item of incoming) {
+    const key = getCredentialKey(item);
+    if (!key) continue;
+    merged.set(key, item);
+  }
+
+  return Array.from(merged.values());
+}
+
+function mergeConfigs(
+  existing: DeployConfig[],
+  incoming: DeployConfig[]
+): DeployConfig[] {
+  const merged = new Map<string, DeployConfig>();
+
+  for (const item of existing) {
+    const key = getCredentialKey(item);
+    if (!key) continue;
+    merged.set(key, item);
+  }
+
+  for (const item of incoming) {
+    const key = getCredentialKey(item);
+    if (!key) continue;
+    merged.set(key, item);
+  }
+
+  return Array.from(merged.values());
+}
+
+function filterMatchedCredentials(
+  credentials: StoredCredential[],
+  configs: DeployConfig[]
+): StoredCredential[] {
+  const requestedSlugs = new Set(
+    configs.map((cfg) => normalizeSlug(cfg.site_slug)).filter(Boolean)
+  );
+  const requestedDomains = new Set(
+    configs.map((cfg) => normalizeDomain(cfg.domain)).filter(Boolean)
+  );
+
+  return credentials.filter((site) => {
+    const slug = normalizeSlug(site.slug || site.site_slug);
+    const domain = normalizeDomain(site.domain);
+    return requestedSlugs.has(slug) || requestedDomains.has(domain);
+  });
+}
+
+function applyTargetMetadata(
+  credentials: StoredCredential[],
+  target: ServerTarget
+): StoredCredential[] {
+  if (!isRemoteTarget(target)) {
+    return credentials;
+  }
+
+  return credentials.map((site) => ({
+    ...site,
+    server_id: target.id,
+    server_host: target.host,
+    server_user: target.user,
+    server_key_path: target.keyPath,
+    server_site_root: target.siteRoot,
+    server_repo_root: target.repoRoot,
+  }));
+}
+
+function syncLocalCaches(credentials: StoredCredential[], configs: DeployConfig[]) {
+  const primary = getPrimaryServerTarget();
+  const cacheDir = join(primary.repoRoot, "admin", ".cache");
+
+  if (!existsSync(cacheDir)) {
+    mkdirSync(cacheDir, { recursive: true });
+  }
+
+  try {
+    writeFileSync(`${cacheDir}/sites-credentials.json`, JSON.stringify(credentials, null, 2));
+    writeFileSync(`${cacheDir}/sites-config.json`, JSON.stringify(configs, null, 2));
+  } catch {
+    // ignore cache mirror failures
+  }
+}
+
+function readTargetCredentials(target: ServerTarget): StoredCredential[] {
+  try {
+    if (!isRemoteTarget(target)) {
+      return readExistingSites() as StoredCredential[];
+    }
+
+    const raw = execSsh(
+      target,
+      `sudo cat ${shellQuote("/root/wp-sites-credentials.json")}`,
+      20000
+    );
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+function createDeployProcess(
+  target: ServerTarget,
+  configs: DeployConfig[]
+): {
+  child: ReturnType<typeof spawn>;
+  cleanup: () => void;
+} {
+  const tempDir = mkdtempSync(join(tmpdir(), "wpbulk-deploy-"));
+  const localConfigPath = join(tempDir, "sites-config.json");
+  writeFileSync(localConfigPath, JSON.stringify(configs, null, 2));
+
+  if (!isRemoteTarget(target)) {
+    const child = spawn("sudo", ["bash", DEPLOY_SCRIPT, localConfigPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    return {
+      child,
+      cleanup: () => {
+        rmSync(tempDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  const remoteConfigPath = execSsh(
+    target,
+    "mktemp /tmp/sites-config-deploy-XXXXXX.json",
+    15000
+  );
+  scpToTarget(target, localConfigPath, remoteConfigPath, 60000);
+
+  const scriptPath = `${target.repoRoot}/scripts/deploy-wp-sites.sh`;
+  const remoteCommand = `sudo bash ${shellQuote(scriptPath)} ${shellQuote(remoteConfigPath)}`;
+  const child = spawnSsh(target, remoteCommand);
+
+  return {
+    child,
+    cleanup: () => {
+      try {
+        execSsh(target, `rm -f ${shellQuote(remoteConfigPath)}`, 15000);
+      } catch {
+        // ignore cleanup failures
+      }
+      rmSync(tempDir, { recursive: true, force: true });
+    },
+  };
 }
 
 type DeployMarker =
@@ -227,6 +429,7 @@ export async function deployRoutes(app: FastifyInstance) {
     }
 
     const { send, close } = setupSSE(reply);
+    let deployCleanup: () => void = () => undefined;
 
     try {
       let completed = 0;
@@ -267,17 +470,22 @@ export async function deployRoutes(app: FastifyInstance) {
         return;
       }
 
-      // 임시 설정 파일 작성
-      const tmpConfig = `/tmp/sites-config-deploy-${Date.now()}.json`;
-      writeFileSync(tmpConfig, JSON.stringify(deployableConfigs, null, 2));
+      const deployTarget = getDefaultDeployTarget();
+      const configsToPersist = deployableConfigs.map((config) =>
+        isRemoteTarget(deployTarget)
+          ? { ...config, server_id: deployTarget.id }
+          : config
+      );
 
-      send({ type: "progress", message: "배포 스크립트 실행 시작..." });
-
-      // 배포 스크립트 실행 (stdout/stderr 실시간 스트리밍)
-      const child = exec(`sudo bash ${DEPLOY_SCRIPT} ${tmpConfig}`, {
-        timeout: 600000,
-        maxBuffer: 50 * 1024 * 1024,
+      send({
+        type: "progress",
+        message: isRemoteTarget(deployTarget)
+          ? `배포 스크립트 실행 시작... (${deployTarget.host})`
+          : "배포 스크립트 실행 시작...",
       });
+
+      const { child, cleanup } = createDeployProcess(deployTarget, deployableConfigs);
+      deployCleanup = cleanup;
 
       child.stdout?.on("data", (data: string) => {
         const lines = data.split("\n").filter(Boolean);
@@ -356,23 +564,29 @@ export async function deployRoutes(app: FastifyInstance) {
         });
         child.on("error", reject);
       });
+      deployCleanup();
+      deployCleanup = () => undefined;
 
-      // 배포 후 credentials 읽기
-      let credentials: unknown[] = [];
-      try {
-        const raw = execSync(`sudo cat ${CREDS_PATH}`, { timeout: 10000 }).toString();
-        credentials = JSON.parse(raw);
-      } catch { /* ignore */ }
+      const existingConfigs = readExistingConfigs();
+      const targetCredentials = readTargetCredentials(deployTarget);
+      const matchedCredentials = applyTargetMetadata(
+        filterMatchedCredentials(targetCredentials, deployableConfigs),
+        deployTarget
+      );
+      const mergedCredentials = mergeCredentials(
+        readExistingSites() as StoredCredential[],
+        matchedCredentials
+      );
+      const mergedConfigs = mergeConfigs(existingConfigs, configsToPersist);
 
-      // .cache에도 동기화
-      const cacheDir = "/home/ubuntu/wp-bulk-generator/admin/.cache";
-      if (!existsSync(cacheDir)) mkdirSync(cacheDir, { recursive: true });
-      try {
-        writeFileSync(`${cacheDir}/sites-credentials.json`, JSON.stringify(credentials, null, 2));
-        writeFileSync(`${cacheDir}/sites-config.json`, JSON.stringify([...existing, ...deployableConfigs], null, 2));
-      } catch { /* ignore */ }
+      writeJson(CREDS_PATH, mergedCredentials);
+      writeJson(CONFIG_PATH, mergedConfigs);
+      syncLocalCaches(mergedCredentials, mergedConfigs);
 
-      const credentialsSummary = summarizeDeployCredentials(credentials, deployableConfigs);
+      const credentialsSummary = summarizeDeployCredentials(
+        mergedCredentials,
+        deployableConfigs
+      );
 
       if (credentialsSummary) {
         const cacheSeedEntries = credentialsSummary.sites
@@ -415,6 +629,7 @@ export async function deployRoutes(app: FastifyInstance) {
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
+      deployCleanup();
       close();
     }
   });

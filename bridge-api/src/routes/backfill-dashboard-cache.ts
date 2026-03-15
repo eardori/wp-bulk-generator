@@ -9,6 +9,12 @@ import {
   type DashboardPost,
 } from "../lib/dashboard-cache.js";
 import { fetchCredentials } from "../lib/ec2-client.js";
+import {
+  getSiteDirForTarget,
+  isRemoteTarget,
+  resolveSiteTarget,
+} from "../lib/server-targets.js";
+import { execSsh, scpToTarget, shellQuote } from "../lib/ssh.js";
 import { setupSSE } from "../utils/sse.js";
 
 type SiteCredential = {
@@ -20,6 +26,12 @@ type SiteCredential = {
   admin_pass: string;
   app_pass: string;
   site_dir?: string;
+  server_id?: string;
+  server_host?: string;
+  server_user?: string;
+  server_key_path?: string;
+  server_site_root?: string;
+  server_repo_root?: string;
 };
 
 const WP_SITES_ROOT = process.env.WP_SITES_ROOT || "/var/www";
@@ -38,11 +50,27 @@ function normalizeSlugs(value: unknown): string[] {
 }
 
 function getLocalSiteDir(site: SiteCredential): string {
-  return site.site_dir || join(WP_SITES_ROOT, site.slug);
+  return getSiteDirForTarget(site, resolveSiteTarget(site));
 }
 
 function hasLocalWordPress(site: SiteCredential): boolean {
-  return existsSync(join(getLocalSiteDir(site), "wp-config.php"));
+  const target = resolveSiteTarget(site);
+  const siteDir = getLocalSiteDir(site);
+
+  if (!isRemoteTarget(target)) {
+    return existsSync(join(siteDir, "wp-config.php"));
+  }
+
+  try {
+    execSsh(
+      target,
+      `[ -f ${shellQuote(join(siteDir, "wp-config.php"))} ] && echo ok`,
+      15000
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function fetchLocalSiteData(site: SiteCredential, perPage = 15): DashboardCacheEntry {
@@ -101,6 +129,74 @@ echo wp_json_encode([
   }
 }
 
+function fetchRemoteSiteDataViaSsh(
+  site: SiteCredential,
+  perPage = 15
+): DashboardCacheEntry {
+  const target = resolveSiteTarget(site);
+  const siteDir = getLocalSiteDir(site);
+  const tempDir = mkdtempSync(join(tmpdir(), "wpbulk-cache-remote-"));
+  const scriptPath = join(tempDir, "dashboard-local.php");
+  const remoteTempDir = `/tmp/wpbulk-cache-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const remoteScriptPath = `${remoteTempDir}/dashboard-local.php`;
+
+  try {
+    writeFileSync(
+      scriptPath,
+      `<?php
+$posts = get_posts([
+  'post_type' => 'post',
+  'post_status' => 'publish',
+  'posts_per_page' => ${perPage},
+  'orderby' => 'date',
+  'order' => 'DESC',
+]);
+
+$payload = array_map(function ($post) {
+  return [
+    'id' => (int) $post->ID,
+    'title' => ['rendered' => (string) get_the_title($post)],
+    'link' => (string) get_permalink($post),
+    'date' => (string) get_post_time(DATE_ATOM, true, $post),
+    'status' => 'publish',
+  ];
+}, $posts);
+
+$counts = wp_count_posts('post');
+$total_count = isset($counts->publish) ? (int) $counts->publish : count($payload);
+
+echo wp_json_encode([
+  'posts' => $payload,
+  'totalCount' => $total_count,
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+`
+    );
+
+    execSsh(target, `mkdir -p ${shellQuote(remoteTempDir)}`, 15000);
+    scpToTarget(target, scriptPath, remoteScriptPath, 30000);
+    const output = execSsh(
+      target,
+      `wp eval-file ${shellQuote(remoteScriptPath)} --path=${shellQuote(siteDir)} --allow-root`,
+      60000
+    ).trim();
+
+    const parsed = JSON.parse(output) as Partial<DashboardCacheEntry>;
+    return {
+      posts: Array.isArray(parsed.posts) ? (parsed.posts as DashboardPost[]) : [],
+      totalCount: typeof parsed.totalCount === "number" ? parsed.totalCount : 0,
+      cachedAt: Date.now(),
+      error: false,
+    };
+  } finally {
+    try {
+      execSsh(target, `rm -rf ${shellQuote(remoteTempDir)}`, 15000);
+    } catch {
+      // ignore cleanup failures
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function fetchRemoteSiteData(site: SiteCredential, perPage = 15): Promise<DashboardCacheEntry> {
   const auth = Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
   const headers = { Authorization: `Basic ${auth}` };
@@ -133,10 +229,23 @@ async function fetchRemoteSiteData(site: SiteCredential, perPage = 15): Promise<
 
 async function resolveSiteCacheEntry(site: SiteCredential): Promise<{ entry: DashboardCacheEntry; source: "local" | "remote" }> {
   if (hasLocalWordPress(site)) {
+    const target = resolveSiteTarget(site);
+    if (isRemoteTarget(target)) {
+      return { entry: fetchRemoteSiteDataViaSsh(site), source: "local" };
+    }
+
     return { entry: fetchLocalSiteData(site), source: "local" };
   }
 
-  return { entry: await fetchRemoteSiteData(site), source: "remote" };
+  try {
+    return { entry: await fetchRemoteSiteData(site), source: "remote" };
+  } catch (error) {
+    if (!isRemoteTarget(resolveSiteTarget(site))) {
+      throw error;
+    }
+
+    return { entry: fetchRemoteSiteDataViaSsh(site), source: "local" };
+  }
 }
 
 export async function backfillDashboardCacheRoutes(app: FastifyInstance) {

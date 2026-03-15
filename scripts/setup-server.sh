@@ -1,11 +1,18 @@
 #!/bin/bash
 # setup-server.sh
 # VPS 초기 세팅 — Nginx + PHP 8.2 + MariaDB + WP-CLI + Redis
-# Ubuntu 22.04/24.04 전용
+# Ubuntu 22.04/24.04, Debian 12 지원
 
 set -euo pipefail
 
 echo "=== WordPress 대량 호스팅 서버 세팅 시작 ==="
+
+OS_ID=""
+if [ -f /etc/os-release ]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  OS_ID="${ID:-}"
+fi
 
 # ---- 0. Swap 추가 (RAM 부족 대비) ----
 if [ ! -f /swapfile ]; then
@@ -37,9 +44,11 @@ systemctl start nginx
 
 # ---- 3. PHP 8.2 + 필수 모듈 설치 ----
 echo "--- PHP 8.2 설치 ---"
-apt-get install -y software-properties-common
-add-apt-repository -y ppa:ondrej/php
-apt-get update -y
+if [ "$OS_ID" = "ubuntu" ]; then
+  apt-get install -y software-properties-common
+  add-apt-repository -y ppa:ondrej/php
+  apt-get update -y
+fi
 apt-get install -y \
   php8.2-fpm \
   php8.2-mysql \
@@ -220,6 +229,7 @@ chown www-data:www-data /var/www
 
 # ---- 11. 방화벽 설정 ----
 echo "--- 방화벽 설정 ---"
+apt-get install -y ufw
 ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp

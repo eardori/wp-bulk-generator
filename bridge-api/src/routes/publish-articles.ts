@@ -7,6 +7,12 @@ import { setupSSE } from "../utils/sse.js";
 import { sanitizeGeneratedArticle } from "../lib/article-sanitizer.js";
 import { updateDashboardSiteCache } from "../lib/dashboard-cache.js";
 import { buildBusinessSchemaFromHtml, stripReviewReferenceMarkers } from "../lib/business-schema.js";
+import {
+  getSiteDirForTarget,
+  isRemoteTarget,
+  resolveSiteTarget,
+} from "../lib/server-targets.js";
+import { execSsh, scpToTarget, shellQuote } from "../lib/ssh.js";
 import type { ReviewImage } from "../types.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -32,6 +38,13 @@ type SiteCredential = {
     tone?: string;
     bio?: string;
   };
+  site_dir?: string;
+  server_id?: string;
+  server_host?: string;
+  server_user?: string;
+  server_key_path?: string;
+  server_site_root?: string;
+  server_repo_root?: string;
 };
 
 type GeneratedArticle = {
@@ -202,11 +215,27 @@ function replacePlaceholders(
 }
 
 function getLocalSiteDir(site: SiteCredential): string {
-  return join(WP_SITES_ROOT, site.slug);
+  return getSiteDirForTarget(site, resolveSiteTarget(site));
 }
 
 function hasLocalWordPress(site: SiteCredential): boolean {
-  return existsSync(join(getLocalSiteDir(site), "wp-config.php"));
+  const target = resolveSiteTarget(site);
+  const siteDir = getLocalSiteDir(site);
+
+  if (!isRemoteTarget(target)) {
+    return existsSync(join(siteDir, "wp-config.php"));
+  }
+
+  try {
+    execSsh(
+      target,
+      `[ -f ${shellQuote(join(siteDir, "wp-config.php"))} ] && echo ok`,
+      15000
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function probeRemoteWordPress(site: SiteCredential): Promise<{
@@ -531,12 +560,20 @@ async function publishLocallyWithWpCli(
   site: SiteCredential,
   finalHtml: string
 ): Promise<PublishResult> {
+  const target = resolveSiteTarget(site);
   const siteDir = getLocalSiteDir(site);
   const tempDir = mkdtempSync(join(tmpdir(), "wpbulk-publish-"));
   const payloadPath = join(tempDir, "payload.json");
   const scriptPath = join(tempDir, "publish-local.php");
 
   try {
+    const remotePayloadPath = isRemoteTarget(target)
+      ? `/tmp/wpbulk-publish-${Date.now()}-${Math.random().toString(36).slice(2)}/payload.json`
+      : payloadPath;
+    const remoteScriptPath = isRemoteTarget(target)
+      ? remotePayloadPath.replace(/payload\.json$/, "publish-local.php")
+      : scriptPath;
+
     writeFileSync(
       payloadPath,
       JSON.stringify({
@@ -554,7 +591,7 @@ async function publishLocallyWithWpCli(
     writeFileSync(
       scriptPath,
       `<?php
-$payload_path = ${JSON.stringify(payloadPath)};
+$payload_path = ${JSON.stringify(remotePayloadPath)};
 $payload = json_decode(file_get_contents($payload_path), true);
 if (!is_array($payload)) {
   fwrite(STDERR, "invalid payload");
@@ -626,11 +663,29 @@ echo wp_json_encode([
 `
     );
 
-    const output = execFileSync(
-      "wp",
-      ["eval-file", scriptPath, `--path=${siteDir}`, "--allow-root"],
-      { encoding: "utf8", timeout: 45000 }
-    ).trim();
+    let output = "";
+    if (!isRemoteTarget(target)) {
+      output = execFileSync(
+        "wp",
+        ["eval-file", scriptPath, `--path=${siteDir}`, "--allow-root"],
+        { encoding: "utf8", timeout: 45000 }
+      ).trim();
+    } else {
+      const remoteTempDir = remotePayloadPath.replace(/\/payload\.json$/, "");
+      execSsh(target, `mkdir -p ${shellQuote(remoteTempDir)}`, 15000);
+      scpToTarget(target, payloadPath, remotePayloadPath, 30000);
+      scpToTarget(target, scriptPath, remoteScriptPath, 30000);
+      output = execSsh(
+        target,
+        `wp eval-file ${shellQuote(remoteScriptPath)} --path=${shellQuote(siteDir)} --allow-root`,
+        60000
+      ).trim();
+      try {
+        execSsh(target, `rm -rf ${shellQuote(remoteTempDir)}`, 15000);
+      } catch {
+        // ignore cleanup failures
+      }
+    }
 
     const parsed = JSON.parse(output);
     const baseUrl = site.url.replace(/\/$/, "");
@@ -742,10 +797,40 @@ ${articleLines}
 - [Sitemap](${baseUrl}/sitemap_index.xml): All published articles
 `;
 
-    const siteDir = `${WP_SITES_ROOT}/${site.slug}`;
-    if (existsSync(`${siteDir}/wp-config.php`)) {
+    const target = resolveSiteTarget(site);
+    const siteDir = getLocalSiteDir(site);
+
+    if (!isRemoteTarget(target) && existsSync(`${siteDir}/wp-config.php`)) {
       writeFileSync(`${siteDir}/llms.txt`, llmsContent);
       writeFileSync(`${siteDir}/llms-full.txt`, llmsContent);
+      return;
+    }
+
+    if (isRemoteTarget(target)) {
+      const tempDir = mkdtempSync(join(tmpdir(), "wpbulk-llms-"));
+      const localShortPath = join(tempDir, "llms.txt");
+      const localFullPath = join(tempDir, "llms-full.txt");
+      const remoteTempDir = `/tmp/wpbulk-llms-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+      try {
+        writeFileSync(localShortPath, llmsContent);
+        writeFileSync(localFullPath, llmsContent);
+        execSsh(target, `mkdir -p ${shellQuote(remoteTempDir)}`, 15000);
+        scpToTarget(target, localShortPath, `${remoteTempDir}/llms.txt`, 30000);
+        scpToTarget(target, localFullPath, `${remoteTempDir}/llms-full.txt`, 30000);
+        execSsh(
+          target,
+          `sudo cp ${shellQuote(`${remoteTempDir}/llms.txt`)} ${shellQuote(`${siteDir}/llms.txt`)} && sudo cp ${shellQuote(`${remoteTempDir}/llms-full.txt`)} ${shellQuote(`${siteDir}/llms-full.txt`)} && sudo chown www-data:www-data ${shellQuote(`${siteDir}/llms.txt`)} ${shellQuote(`${siteDir}/llms-full.txt`)}`,
+          30000
+        );
+      } finally {
+        try {
+          execSsh(target, `rm -rf ${shellQuote(remoteTempDir)}`, 15000);
+        } catch {
+          // ignore cleanup failures
+        }
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     }
   } catch {
     // best-effort

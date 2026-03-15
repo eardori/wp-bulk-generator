@@ -18,6 +18,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 # ---- 설정 로드 ----
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+APP_FILE_OWNER="${APP_FILE_OWNER:-$(stat -c '%U:%G' "$REPO_ROOT" 2>/dev/null || echo root:root)}"
+
 source /root/.wp-bulk-credentials  # DB_ROOT_PASS
 
 WP_ADMIN_USER="admin"
@@ -28,29 +32,29 @@ CREDS_FILE="/root/wp-sites-credentials.json"
 ALLMYREVIEW_CERT_NAME="allmyreview-sites"
 ALLMYREVIEW_CERT_DIR="/etc/letsencrypt/live/$ALLMYREVIEW_CERT_NAME"
 ALLMYREVIEW_CERT_MAX_NAMES=95
-WP_CRON_RUNNER_PATH="/usr/local/bin/wp-bulk-run-cron.sh"
-WP_CRON_SCHEDULE_PATH="/etc/cron.d/wp-bulk-run-cron"
+WP_CRON_RUNNER_PATH="${WP_CRON_RUNNER_PATH:-/usr/local/bin/wp-bulk-run-cron.sh}"
+WP_CRON_SCHEDULE_PATH="${WP_CRON_SCHEDULE_PATH:-/etc/cron.d/wp-bulk-run-cron}"
 WP_CLI_TIMEOUT="${WP_CLI_TIMEOUT:-30}"
-POST_DEPLOY_REPAIR_SCRIPT="${POST_DEPLOY_REPAIR_SCRIPT:-/home/ubuntu/wp-bulk-generator/scripts/backfill-existing-sites.sh}"
+POST_DEPLOY_REPAIR_SCRIPT="${POST_DEPLOY_REPAIR_SCRIPT:-$SCRIPT_DIR/backfill-existing-sites.sh}"
 INDEXNOW_KEY_FILE="${INDEXNOW_KEY_FILE:-/root/.wp-bulk-indexnow-key}"
 
-# ubuntu 유저(Next.js)가 읽을 수 있는 캐시 경로
-APP_CACHE_DIR="/home/ubuntu/wp-bulk-generator/admin/.cache"
+# 앱/브리지 캐시 경로
+APP_CACHE_DIR="${APP_CACHE_DIR:-$REPO_ROOT/admin/.cache}"
 APP_CREDS_FILE="$APP_CACHE_DIR/sites-credentials.json"
 mkdir -p "$APP_CACHE_DIR"
 
-# EC2 Agent (Bridge API)가 읽는 경로
-BRIDGE_DATA_DIR="/home/ubuntu/wp-bulk-generator/bridge-api/data"
+# Bridge API가 읽는 경로
+BRIDGE_DATA_DIR="${BRIDGE_DATA_DIR:-$REPO_ROOT/bridge-api/data}"
 BRIDGE_CREDS_FILE="$BRIDGE_DATA_DIR/wp-sites-credentials.json"
 mkdir -p "$BRIDGE_DATA_DIR"
 
 # 캐시 동기화 함수 (사이트 설치 후 호출)
 sync_cache() {
   cp "$CREDS_FILE" "$APP_CREDS_FILE" 2>/dev/null || true
-  chown ubuntu:ubuntu "$APP_CREDS_FILE" 2>/dev/null || true
+  chown "$APP_FILE_OWNER" "$APP_CREDS_FILE" 2>/dev/null || true
   # EC2 Agent가 읽는 경로에도 동기화
   cp "$CREDS_FILE" "$BRIDGE_CREDS_FILE" 2>/dev/null || true
-  chown ubuntu:ubuntu "$BRIDGE_CREDS_FILE" 2>/dev/null || true
+  chown "$APP_FILE_OWNER" "$BRIDGE_CREDS_FILE" 2>/dev/null || true
 }
 
 wp_try() {
