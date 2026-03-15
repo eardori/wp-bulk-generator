@@ -20,6 +20,9 @@ const CONFIG_PATH =
   process.env.CONFIG_PATH || "/root/wp-sites-config.json";
 const DEPLOY_SCRIPT =
   process.env.DEPLOY_SCRIPT_PATH || "/home/ubuntu/wp-bulk-generator/scripts/deploy-wp-sites.sh";
+const SECONDARY_PROXY_SYNC_SCRIPT =
+  process.env.SECONDARY_PROXY_SYNC_SCRIPT ||
+  join(getPrimaryServerTarget().repoRoot, "scripts", "sync-secondary-proxies.sh");
 
 type DeployConfig = {
   site_slug?: string;
@@ -398,6 +401,16 @@ function summarizeDeployCredentials(
   };
 }
 
+function runSecondaryProxySync() {
+  if (!existsSync(SECONDARY_PROXY_SYNC_SCRIPT)) {
+    return "";
+  }
+
+  return execSync(`sudo bash ${shellQuote(SECONDARY_PROXY_SYNC_SCRIPT)}`, {
+    timeout: 10 * 60 * 1000,
+  }).toString();
+}
+
 function appendChunkLines(
   pending: string,
   data: string | Buffer,
@@ -618,6 +631,40 @@ export async function deployRoutes(app: FastifyInstance) {
       writeJson(CREDS_PATH, mergedCredentials);
       writeJson(CONFIG_PATH, mergedConfigs);
       syncLocalCaches(mergedCredentials, mergedConfigs);
+
+      if (isRemoteTarget(deployTarget)) {
+        send({ type: "log", message: "--- primary proxy sync ---" });
+        try {
+          const proxySyncOutput = runSecondaryProxySync();
+          for (const line of proxySyncOutput.split(/\r?\n/).filter(Boolean)) {
+            send({ type: "log", message: line });
+          }
+        } catch (error) {
+          const stdout =
+            error &&
+            typeof error === "object" &&
+            "stdout" in error &&
+            Buffer.isBuffer((error as { stdout?: unknown }).stdout)
+              ? (error as { stdout: Buffer }).stdout.toString("utf8")
+              : "";
+          const stderr =
+            error &&
+            typeof error === "object" &&
+            "stderr" in error &&
+            Buffer.isBuffer((error as { stderr?: unknown }).stderr)
+              ? (error as { stderr: Buffer }).stderr.toString("utf8")
+              : "";
+
+          for (const line of `${stdout}\n${stderr}`.split(/\r?\n/).filter(Boolean)) {
+            send({ type: "log", message: line });
+          }
+
+          send({
+            type: "log",
+            message: "⚠ primary proxy sync failed; secondary sites may stay inaccessible until sync completes.",
+          });
+        }
+      }
 
       const credentialsSummary = summarizeDeployCredentials(
         mergedCredentials,

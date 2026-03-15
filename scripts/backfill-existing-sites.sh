@@ -13,6 +13,7 @@ APP_CREDS_FILE="$APP_CACHE_DIR/sites-credentials.json"
 ALLMYREVIEW_CERT_NAME="allmyreview-sites"
 ALLMYREVIEW_CERT_DIR="/etc/letsencrypt/live/$ALLMYREVIEW_CERT_NAME"
 ALLMYREVIEW_CERT_MAX_NAMES=95
+CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 WP_CRON_RUNNER_PATH="/usr/local/bin/wp-bulk-run-cron.sh"
 WP_CRON_SCHEDULE_PATH="/etc/cron.d/wp-bulk-run-cron"
 WP_CLI_TIMEOUT="${WP_CLI_TIMEOUT:-20}"
@@ -254,6 +255,12 @@ ensure_allmyreview_certificate() {
     --non-interactive
     --cert-name "$ALLMYREVIEW_CERT_NAME"
   )
+
+  if [ -n "$CERTBOT_EMAIL" ]; then
+    certbot_args+=(--agree-tos --email "$CERTBOT_EMAIL")
+  else
+    certbot_args+=(--agree-tos --register-unsafely-without-email)
+  fi
 
   if [ -f "$ALLMYREVIEW_CERT_DIR/fullchain.pem" ]; then
     certbot_args+=(--expand)
@@ -627,6 +634,10 @@ ensure_wordpress_runtime_config() {
   fi
 
   wp_try config set DISABLE_WP_CRON true --raw --type=constant --path="$site_dir" --allow-root --quiet 2>/dev/null || true
+
+  if [ -f "$wp_config" ] && ! grep -q "HTTP_X_FORWARDED_PROTO" "$wp_config" 2>/dev/null; then
+    sed -i "/require_once ABSPATH . 'wp-settings.php';/i if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) \\&\\& strpos(\$_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) { \$_SERVER['HTTPS'] = 'on'; }\nif (isset(\$_SERVER['HTTP_X_FORWARDED_HOST']) \\&\\& \$_SERVER['HTTP_X_FORWARDED_HOST'] !== '') { \$_SERVER['HTTP_HOST'] = \$_SERVER['HTTP_X_FORWARDED_HOST']; }" "$wp_config"
+  fi
 }
 
 ensure_plugin_active() {
