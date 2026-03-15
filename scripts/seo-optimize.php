@@ -63,6 +63,26 @@ function is_placeholder_telephone($telephone) {
   return (bool) preg_match('/(?:1234-5678|0000-0000|1111-1111|9999-9999)/', (string) $telephone);
 }
 
+function is_review_keyword_tag($tag_name) {
+  $tag_name = trim((string) $tag_name);
+  if ($tag_name === '') {
+    return false;
+  }
+
+  $patterns = array(
+    '/(?:맛있어요|좋아요|멋져요|친절해요|깔끔해요|깨끗해요|신선해요|넓어요|아늑해요|편해요|편리해요|특별해요|훌륭해요|세련됐어요|고급스러워요|만족스러워요)$/u',
+    '/(?:음식|고기\s*질|서비스|인테리어|매장|분위기|재료|양|가성비|주차|좌석|화장실|반찬|소스|직원|응대|룸|공간).*(?:맛있어요|좋아요|멋져요|친절해요|깔끔해요|깨끗해요|신선해요|넓어요|아늑해요|편해요|편리해요|특별해요|훌륭해요|세련됐어요|고급스러워요|만족스러워요)$/u',
+  );
+
+  foreach ($patterns as $pattern) {
+    if (preg_match($pattern, $tag_name)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function cleanup_uncertain_place_info_rows($html) {
   $row_patterns = array(
     '/<tr[^>]*>[\s\S]*?(?:전화번호|전화|문의)[\s\S]*?<\/tr>/iu',
@@ -579,6 +599,17 @@ foreach ($posts as $post) {
 
   update_post_meta($post->ID, '_yoast_wpseo_title', mb_substr($title, 0, 60));
   update_post_meta($post->ID, '_yoast_wpseo_metadesc', mb_substr($excerpt, 0, 155));
+
+  $terms = wp_get_post_terms($post->ID, 'post_tag');
+  if (!is_wp_error($terms)) {
+    $filtered_tag_ids = array();
+    foreach ($terms as $term) {
+      if (!is_review_keyword_tag($term->name ?? '')) {
+        $filtered_tag_ids[] = (int) $term->term_id;
+      }
+    }
+    wp_set_post_terms($post->ID, $filtered_tag_ids, 'post_tag', false);
+  }
 
   $updated++;
   $faq_label = $faq_count > 0 ? " + FAQ({$faq_count})" : '';
