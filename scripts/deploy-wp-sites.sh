@@ -141,6 +141,11 @@ collect_allmyreview_domains() {
 }
 
 ensure_allmyreview_certificate() {
+  if [ "${SKIP_CERTBOT:-0}" = "1" ]; then
+    echo "  ↷ SKIP_CERTBOT=1 설정으로 secondary certbot 단계를 건너뜁니다."
+    return 0
+  fi
+
   if ! command -v certbot >/dev/null 2>&1; then
     echo "  ⚠ certbot이 없어 SSL 인증서를 갱신하지 못했습니다."
     return 0
