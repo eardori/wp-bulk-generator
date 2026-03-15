@@ -5,7 +5,7 @@ const BRIDGE_KEY = process.env.BRIDGE_API_KEY || "";
 const JWT_SECRET = process.env.BRIDGE_JWT_SECRET || "";
 
 function getBridgeJwtSigningSecret(): string {
-  return JWT_SECRET || BRIDGE_KEY;
+  return BRIDGE_KEY || JWT_SECRET;
 }
 
 /**
