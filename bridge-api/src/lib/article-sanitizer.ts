@@ -1,3 +1,5 @@
+import * as cheerio from "cheerio";
+
 type FAQItem = {
   question: string;
   answer: string;
@@ -28,6 +30,22 @@ const REVIEW_REF_PATTERNS = [
   /\s*리뷰\s*\d+\s*번\s*/g,
 ];
 
+const REVIEW_META_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/총\s*\d+\s*개(?:의)?\s*리뷰(?:\s*데이터)?(?:를)?\s*기반(?:으로)?/gu, ""],
+  [/리뷰\s*데이터(?:를)?\s*기반(?:으로)?/gu, ""],
+  [/리뷰\s*기반(?:으로)?/gu, ""],
+  [/리뷰를\s*(?:보면|종합하면|살펴보면)/gu, ""],
+  [/많은\s*(?:방문자|방문객)들이\s*공통적으로/gu, "특히"],
+  [/방문자들이\s*공통적으로/gu, "특히"],
+  [/리뷰어(?:들)?(?:가)?\s*가장\s*많이\s*언급한/gu, "대표"],
+  [/방문자(?:들)?(?:이)?\s*가장\s*많이\s*언급한/gu, "대표"],
+  [/실제\s*(?:구매자|사용자)\s*리뷰\s*사진/gu, "참고 이미지"],
+  [/실제\s*사용\s*사진/gu, "참고 이미지"],
+];
+
+const EMPTY_INFO_TEXT_PATTERN =
+  /^(?:전화|주소|지번주소|지역|영업시간|주차|예약(?:여부)?|가격대|대표메뉴|메뉴|가격|편의시설|찾아가는길)\s*[:：-]?\s*(?:정보 없음|문의 필요|확인 필요)\s*$/u;
+
 export function sanitizeInternalReviewRefs(text: string): string {
   let sanitized = text || "";
 
@@ -43,8 +61,44 @@ export function sanitizeInternalReviewRefs(text: string): string {
   return sanitized.trim();
 }
 
+function sanitizeMetaReviewPhrases(text: string): string {
+  let sanitized = text || "";
+
+  for (const [pattern, replacement] of REVIEW_META_REPLACEMENTS) {
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+
+  sanitized = sanitized.replace(/(:\s*)(?:정보 없음|문의 필요|확인 필요)\b/gu, "$1");
+  sanitized = sanitized.replace(/\s{2,}/g, " ");
+  sanitized = sanitized.replace(/\s+([,.;:!?])/g, "$1");
+  sanitized = sanitized.replace(/([:：-])\s*(?:<\/[^>]+>)?$/gu, "");
+
+  return sanitized.trim();
+}
+
 export function sanitizeInternalReviewRefsInHtml(html: string): string {
-  let sanitized = sanitizeInternalReviewRefs(html || "");
+  const $ = cheerio.load(sanitizeInternalReviewRefs(html || ""), null, false);
+
+  $("tr, p, li, div.place-info div, div.place-info p, td, th, figcaption").each((_, el) => {
+    const text = $(el).text().replace(/\s+/g, " ").trim();
+
+    if (EMPTY_INFO_TEXT_PATTERN.test(text)) {
+      $(el).remove();
+      return;
+    }
+
+    if ($(el).children().length === 0) {
+      const cleaned = sanitizeMetaReviewPhrases(text);
+      if (!cleaned) {
+        $(el).remove();
+        return;
+      }
+      $(el).text(cleaned);
+    }
+  });
+
+  let sanitized = $.html();
+  sanitized = sanitizeMetaReviewPhrases(sanitized);
   sanitized = sanitized.replace(/>\s+/g, ">");
   sanitized = sanitized.replace(/\s+</g, "<");
   return sanitized.trim();
@@ -59,20 +113,20 @@ function isReviewKeywordTag(tag: string): boolean {
 export function sanitizeGeneratedArticle<T extends GeneratedArticleLike>(article: T): T {
   return {
     ...article,
-    title: sanitizeInternalReviewRefs(article.title),
-    metaTitle: sanitizeInternalReviewRefs(article.metaTitle),
-    metaDescription: sanitizeInternalReviewRefs(article.metaDescription),
+    title: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.title)),
+    metaTitle: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.metaTitle)),
+    metaDescription: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.metaDescription)),
     htmlContent: sanitizeInternalReviewRefsInHtml(article.htmlContent),
-    excerpt: sanitizeInternalReviewRefs(article.excerpt),
+    excerpt: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.excerpt)),
     tags: Array.isArray(article.tags)
       ? article.tags
-          .map((tag) => sanitizeInternalReviewRefs(tag))
+          .map((tag) => sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(tag)))
           .filter((tag) => tag && !isReviewKeywordTag(tag))
       : [],
     faqSchema: Array.isArray(article.faqSchema)
       ? article.faqSchema.map((faq) => ({
-          question: sanitizeInternalReviewRefs(faq.question),
-          answer: sanitizeInternalReviewRefs(faq.answer),
+          question: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(faq.question)),
+          answer: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(faq.answer)),
         }))
       : [],
   };

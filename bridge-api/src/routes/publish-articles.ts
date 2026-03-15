@@ -204,11 +204,11 @@ function replacePlaceholders(
     const imgUrl = uploaded?.url || originalUrl;
 
     const altText = article.sourceTitle
-      ? `${article.sourceTitle} 실제 구매자 리뷰 사진 ${imgCounter}`
-      : `실제 구매자 리뷰 사진 ${imgCounter}`;
+      ? `${article.sourceTitle} 참고 이미지 ${imgCounter}`
+      : `참고 이미지 ${imgCounter}`;
     const captionText = article.sourceTitle
-      ? `${article.sourceTitle} 실제 사용 사진`
-      : `실제 구매자 리뷰 사진`;
+      ? `${article.sourceTitle} 참고 이미지`
+      : `참고 이미지`;
 
     return `<figure class="review-image"><img src="${imgUrl}" alt="${altText}" loading="lazy" /><figcaption>${captionText}</figcaption></figure>`;
   });

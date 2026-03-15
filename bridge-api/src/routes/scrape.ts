@@ -16,6 +16,11 @@ type NaverPlaceReviewItem = {
   date: string;
 };
 
+type NaverPlaceMenuItem = {
+  name: string;
+  price: string;
+};
+
 /** Try restaurant URL first, then fallback to place URL */
 async function gotoNaverPlacePage(
   page: Page,
@@ -188,6 +193,104 @@ function normalizeNaverPlaceReviewDate(dateText: string): string {
   }
 
   return normalized.replace(/^방문일/, "").trim();
+}
+
+function normalizeMenuPrice(priceText: string): string {
+  const match = priceText.replace(/\s+/g, " ").match(/((?:\d{1,3}(?:,\d{3})+|\d{4,})(?:\s*~\s*(?:\d{1,3}(?:,\d{3})+|\d{4,}))?)\s*원/);
+  return match ? `${match[1].replace(/\s+/g, "")}원` : "";
+}
+
+function summarizeMenuItems(items: NaverPlaceMenuItem[]): string {
+  return items
+    .slice(0, 6)
+    .map((item) => `${item.name} ${item.price}`)
+    .join(", ");
+}
+
+function summarizeMenuPriceRange(items: NaverPlaceMenuItem[]): string {
+  const prices = items
+    .flatMap((item) =>
+      item.price
+        .replace(/원/g, "")
+        .split("~")
+        .map((value) => Number(value.replace(/,/g, "").trim()))
+    )
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+
+  if (prices.length === 0) {
+    return "";
+  }
+
+  const min = prices[0];
+  const max = prices[prices.length - 1];
+  if (min === max) {
+    return `${min.toLocaleString()}원`;
+  }
+
+  return `${min.toLocaleString()}~${max.toLocaleString()}원`;
+}
+
+async function collectNaverPlaceMenuItems(
+  page: Page,
+  placeId: string
+): Promise<NaverPlaceMenuItem[]> {
+  const navigated = await gotoNaverPlacePage(page, placeId, "menu", [
+    ".place_section_content",
+    ".place_section",
+    "li",
+  ]);
+
+  if (!navigated) {
+    return [];
+  }
+
+  await page.waitForTimeout(NAVER_PLACE_SETTLE_MS);
+
+  return page.evaluate(() => {
+    const items: NaverPlaceMenuItem[] = [];
+    const seen = new Set<string>();
+    const candidates = Array.from(
+      document.querySelectorAll("li, div")
+    ) as HTMLElement[];
+
+    for (const node of candidates) {
+      const raw = node.textContent?.replace(/\s+/g, " ").trim() ?? "";
+      if (!raw || raw.length < 4 || raw.length > 120) {
+        continue;
+      }
+
+      const priceMatch = raw.match(/((?:\d{1,3}(?:,\d{3})+|\d{4,})(?:\s*~\s*(?:\d{1,3}(?:,\d{3})+|\d{4,}))?)\s*원/);
+      if (!priceMatch) {
+        continue;
+      }
+
+      const price = `${priceMatch[1].replace(/\s+/g, "")}원`;
+      const beforePrice = raw.slice(0, priceMatch.index).trim();
+      const name = beforePrice
+        .replace(/^(대표|추천|인기|시그니처|BEST)\s*/i, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      if (!name || name.length > 40 || /원$/.test(name)) {
+        continue;
+      }
+
+      const key = `${name}|${price}`;
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      items.push({ name, price });
+
+      if (items.length >= 8) {
+        break;
+      }
+    }
+
+    return items;
+  });
 }
 
 export async function scrapeRoutes(app: FastifyInstance) {
@@ -450,6 +553,10 @@ export async function scrapeRoutes(app: FastifyInstance) {
         };
       });
 
+      const menuItems = await collectNaverPlaceMenuItems(page, placeId).catch(() => []);
+      const menuSummary = summarizeMenuItems(menuItems);
+      const priceRange = summarizeMenuPriceRange(menuItems);
+
       // Navigate to review page
       const reviewNavigated = await gotoNaverPlacePage(
         page,
@@ -500,7 +607,7 @@ export async function scrapeRoutes(app: FastifyInstance) {
         url,
         title: placeData.name,
         description: placeData.aiBriefing || placeData.directions || "",
-        price: "",
+        price: priceRange,
         images: placeData.images,
         specs: {
           address: placeData.address,
@@ -510,6 +617,8 @@ export async function scrapeRoutes(app: FastifyInstance) {
           directions: placeData.directions,
           aiBriefing: placeData.aiBriefing,
           tags: placeData.tags.join(", "),
+          menuSummary,
+          priceRange,
         },
         reviews,
         rating: null,

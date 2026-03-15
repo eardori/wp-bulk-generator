@@ -241,6 +241,48 @@ function summarizeContentPrompt(prompt: string, limit = 90): string {
   return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
 }
 
+function firstNonEmptyText(...values: Array<string | undefined | null>): string {
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function getProductSpecValue(product: ScrapedProduct, aliases: string[]): string {
+  for (const alias of aliases) {
+    const value = product.specs[alias]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function buildRestaurantFactMap(product: ScrapedProduct) {
+  return {
+    address: getProductSpecValue(product, ["주소", "address"]),
+    lotAddress: getProductSpecValue(product, ["지번주소", "formattedAddress"]),
+    region: getProductSpecValue(product, ["지역", "region"]),
+    phone: getProductSpecValue(product, ["전화", "phone"]),
+    hours: getProductSpecValue(product, ["영업시간", "hours"]),
+    facilities: getProductSpecValue(product, ["편의시설", "facilities"]),
+    directions: getProductSpecValue(product, ["찾아가는길", "directions"]),
+    keywords: getProductSpecValue(product, ["키워드", "tags"]),
+    naverReviewSummary: getProductSpecValue(product, ["네이버리뷰", "aiBriefing"]),
+    blogReviewCount: getProductSpecValue(product, ["블로그리뷰", "blogReviews"]),
+    menuSummary: getProductSpecValue(product, ["대표메뉴", "menuSummary"]),
+    priceRange: firstNonEmptyText(
+      product.price,
+      getProductSpecValue(product, ["가격대", "priceRange"])
+    ),
+  };
+}
+
 function pickReaderLens(isRestaurant: boolean, articleVariation: number): ReaderLens {
   const pool = isRestaurant ? PLACE_READER_LENSES : PRODUCT_READER_LENSES;
   return pool[articleVariation % pool.length];
@@ -688,8 +730,9 @@ function buildPlaceReviewPromptSection(reviews: ProductReview[], articleVariatio
   ).sort((a, b) => b[1] - a[1]);
   const representativeReviews = pickRepresentativeReviews(indexedReviews);
 
-  let section = `\n\n## 실방문자 리뷰 분석:\n`;
-  section += buildDirectReviewCoverageSummary(reviews, "전체 50개 리뷰 공통 패턴");
+  let section = `\n\n## 참고 후기 자료 요약 (내부 참고용):\n`;
+  section += `- 아래 내용은 글감 정리용 참고 메모입니다. 최종 글에는 "리뷰 기반", "총 50개 리뷰", "방문자들이 공통적으로" 같은 메타 표현을 쓰지 마세요.\n`;
+  section += buildDirectReviewCoverageSummary(reviews, "참고 자료 전체 패턴");
   section += `- 이번 글에 전달된 리뷰: ${indexedReviews.length}건\n`;
   section += `- 이번 리뷰 묶음 평균 평점: ${averageRating}점\n`;
   section += `- 만족 리뷰 비율(4~5점): ${formatPercent(positiveCount, indexedReviews.length)}%\n`;
@@ -702,13 +745,13 @@ function buildPlaceReviewPromptSection(reviews: ProductReview[], articleVariatio
   }
 
   if (representativeReviews.length > 0) {
-    section += `\n### 대표 리뷰 근거:\n`;
+    section += `\n### 참고 메모:\n`;
     for (const { label, item } of representativeReviews) {
       section += `- ${label}: ${truncateText(item.review.text, 110)}\n`;
     }
   }
 
-  section += `\n### 실제 리뷰 전문 (${indexedReviews.length}건, 아래 번호는 내부 이미지 매핑용이며 최종 글에 노출 금지):\n`;
+  section += `\n### 참고 후기 원문 (${indexedReviews.length}건, 아래 번호는 내부 이미지 매핑용이며 최종 글에 노출 금지):\n`;
   for (const { globalIndex, review } of indexedReviews) {
     const optionLabel = review.purchaseOption?.trim() ? ` | 메뉴/옵션: ${review.purchaseOption.trim()}` : "";
     const dateLabel = review.date?.trim() ? ` | 날짜: ${review.date.slice(0, 10)}` : "";
@@ -895,23 +938,23 @@ ${normalizedPrompt}
 
   const restaurantAngleConfigs = [
     {
-      label: "첫 방문 솔직 후기",
-      titleFormat: `제목 형식: "처음 가봤는데 [솔직한 결과]" 또는 "[지역] [음식종류] 추천받아서 가봤더니" — 가게명을 제목 앞에 넣지 말 것`,
+      label: "첫 방문 포인트 정리",
+      titleFormat: `제목 형식: "[지역] [음식종류] 찾을 때 체크할 포인트" 또는 "[가게명] 첫인상부터 메뉴 선택까지" — 과장 없이 구체적으로`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 방문하게 된 계기 & 찾아가는 법
 ② 들어서는 순간 첫인상 & 분위기
-③ 실제로 먹어본 메뉴 솔직 평가 (기대 vs 현실)
+③ 대표 메뉴 구성과 맛 포인트
 ④ 좋았던 점 3가지 / 아쉬웠던 점 2가지
 ⑤ 재방문 의향 & 이런 분께 추천합니다`,
     },
     {
-      label: "메뉴 & 가격 완전 정복",
-      titleFormat: `제목 형식: "[주메뉴] 가격 & 후기 총정리" 또는 "메뉴 뭐 시킬지 고민됐는데 다 먹어봤습니다" — 가게명보다 음식/메뉴를 제목 앞에 배치`,
+      label: "메뉴 & 가격 정리",
+      titleFormat: `제목 형식: "[주메뉴] 가격 정리" 또는 "[가게명]에서 뭘 시킬지 고민될 때" — 가게명보다 음식/메뉴를 제목 앞에 배치`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 전체 메뉴판 & 가격 총정리 (표로 정리)
-② 시그니처 메뉴 상세 리뷰 (맛, 양, 비주얼)
-③ 사이드 & 추가 메뉴 가성비 평가
-④ 리뷰어들이 가장 많이 언급한 메뉴 TOP 3
+② 시그니처 메뉴 상세 정리 (맛, 양, 비주얼)
+③ 사이드 & 추가 메뉴 구성 비교
+④ 대표 메뉴 TOP 3 비교
 ⑤ 처음 방문자 추천 조합 & 피해야 할 메뉴`,
     },
     {
@@ -925,21 +968,21 @@ ${normalizedPrompt}
 ⑤ 예약 방법 & 방문 최적 시간대`,
     },
     {
-      label: "가성비 & 재방문 분석",
+      label: "가성비 & 만족도 정리",
       titleFormat: `제목 형식: "가성비 [음식종류] 찾다가 발견한 곳" 또는 "[가격대]에 이 퀄리티?" — 가격/가성비 키워드를 제목에 포함`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 가격표 & 경쟁 가게 대비 가성비 분석
 ② 양 & 퀄리티 — 실제로 배부를까?
-③ 리뷰 분석으로 본 재방문율 & 단골 비율
+③ 만족도가 갈리는 포인트
 ④ 더 저렴하게 먹는 꿀팁 (타이밍, 세트 조합)
 ⑤ 총합 가성비 점수 & 추천 기준`,
     },
     {
-      label: "리뷰 기반 베스트 메뉴 추천",
-      titleFormat: `제목 형식: "꼭 먹어야 할 메뉴 TOP [숫자]" 또는 "리뷰 [N]개 분석해서 뽑은 최애 메뉴" — 추천/TOP 키워드로 시작`,
+      label: "대표 메뉴 선택 가이드",
+      titleFormat: `제목 형식: "꼭 먹어야 할 메뉴 TOP [숫자]" 또는 "[가게명]에서 먼저 볼 메뉴 정리" — 추천/TOP 키워드로 시작`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
-① 리뷰 데이터로 선정한 베스트 메뉴 선정 기준
-② TOP 1 — 압도적 1위 메뉴 심층 리뷰
+① 베스트 메뉴를 고른 기준
+② TOP 1 — 압도적 1위 메뉴 심층 정리
 ③ TOP 2~3 — 강력 추천 메뉴 상세 비교
 ④ 의외의 숨겨진 메뉴 & 직원 추천 메뉴
 ⑤ 이 조합이 최고입니다 (주메뉴 + 사이드 세트)`,
@@ -951,28 +994,28 @@ ${normalizedPrompt}
 ① 비슷한 가게들과 무엇이 다른가
 ② 이 가게만의 시그니처 조리법 & 맛의 비결
 ③ 서비스 스타일 & 사장님 스토리
-④ 단골들이 특히 칭찬하는 포인트 (리뷰 인용)
+④ 손님들이 자주 찾는 포인트
 ⑤ 이런 분께는 추천 / 이런 분께는 비추`,
     },
     {
       label: "가족 & 단체 방문 완전 가이드",
-      titleFormat: `제목 형식: "가족끼리 가기 좋은 [음식종류]집" 또는 "아이 데리고 가도 될까? [가게명] 직접 가봄" — 가족/아이 키워드 포함`,
+      titleFormat: `제목 형식: "가족끼리 가기 좋은 [음식종류]집" 또는 "아이와 함께 가기 전 체크할 점" — 가족/아이 키워드 포함`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 단체석 & 유아시설 (아이 의자, 수유실, 키즈존)
 ② 어르신·아이 함께 먹기 좋은 메뉴 구성
 ③ 주차 & 접근성 (대중교통 + 자차 방문 기준)
 ④ 가족 모임으로 이 가게를 선택한 이유
-⑤ 방문 전 전화 예약 필수 여부 & 대기 팁`,
+⑤ 방문 전 예약/대기 체크 포인트`,
     },
     {
-      label: "SNS 핫플 & 현실 비교",
-      titleFormat: `제목 형식: "웨이팅 [N]분 기다려서 먹어봤는데" 또는 "SNS에서 난리난 [음식종류]집 실제로 가봤다" — 웨이팅/SNS/현실 키워드 포함`,
+      label: "인기 이유 & 방문 전 체크",
+      titleFormat: `제목 형식: "요즘 많이 찾는 [음식종류]집" 또는 "[가게명] 방문 전 체크할 포인트" — 인기/현실 키워드 포함`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 왜 지금 이 가게가 핫한가 (인기 배경)
-② 인스타 사진 vs 실물 비교 (솔직하게)
-③ 대기 줄 & 웨이팅 실제 소요 시간 (시간대별)
+② 인스타 사진 vs 실제 분위기 비교
+③ 방문 전 알아둘 포인트
 ④ 포토스팟 & 감성 사진 잘 나오는 각도 팁
-⑤ 덜 기다리고 방문하는 꿀타임 & 예약 방법`,
+⑤ 붐비는 시간대와 예약 체크 포인트`,
     },
   ];
 
@@ -990,30 +1033,32 @@ ${normalizedPrompt}
   if (isRestaurant) {
     const reviewsSection = buildPlaceReviewPromptSection(product.reviews, articleVariation);
     const placeHasReviewImages = product.reviews.some((review) => (review.images?.length || 0) > 0);
-
+    const restaurantFacts = buildRestaurantFactMap(product);
     const placeInfo = [
-      product.specs["주소"] && `주소: ${product.specs["주소"]}`,
-      product.specs["지번주소"] && `지번주소: ${product.specs["지번주소"]}`,
-      product.specs["지역"] && `지역: ${product.specs["지역"]}`,
-      product.specs["전화"] && `전화: ${product.specs["전화"]}`,
-      product.specs["영업시간"] && `영업시간: ${product.specs["영업시간"]}`,
-      product.specs["편의시설"] && `편의시설: ${product.specs["편의시설"]}`,
-      product.specs["찾아가는길"] && `찾아가는길: ${product.specs["찾아가는길"]}`,
-      product.specs["키워드"] && `특징키워드: ${product.specs["키워드"]}`,
-      product.specs["네이버리뷰"] && `네이버 리뷰 요약: ${product.specs["네이버리뷰"]}`,
-      product.specs["블로그리뷰"] && `블로그 리뷰 수: ${product.specs["블로그리뷰"]}`,
+      restaurantFacts.address && `주소: ${restaurantFacts.address}`,
+      restaurantFacts.lotAddress && `지번주소: ${restaurantFacts.lotAddress}`,
+      restaurantFacts.region && `지역: ${restaurantFacts.region}`,
+      restaurantFacts.phone && `전화: ${restaurantFacts.phone}`,
+      restaurantFacts.hours && `영업시간: ${restaurantFacts.hours}`,
+      restaurantFacts.facilities && `편의시설: ${restaurantFacts.facilities}`,
+      restaurantFacts.directions && `찾아가는길: ${restaurantFacts.directions}`,
+      restaurantFacts.menuSummary && `대표메뉴: ${restaurantFacts.menuSummary}`,
+      restaurantFacts.priceRange && `가격대: ${restaurantFacts.priceRange}`,
+      restaurantFacts.keywords && `특징키워드: ${restaurantFacts.keywords}`,
+      restaurantFacts.naverReviewSummary && `장소 요약: ${restaurantFacts.naverReviewSummary}`,
+      restaurantFacts.blogReviewCount && `블로그 리뷰 수: ${restaurantFacts.blogReviewCount}`,
     ].filter(Boolean).join("\n");
 
     const restaurantPrompt = `당신은 "${persona.name}"입니다. ${persona.bio || ""}
 나이: ${persona.age}세 | 글쓰기 톤: ${persona.tone}
 ${variationHint}
 
-당신이 직접 방문한 맛집 리뷰 블로그 글을 작성하세요.
-아래 장소 정보와 실방문자 리뷰를 바탕으로 생생하고 신뢰도 높은 맛집 리뷰 글을 작성하세요.
+아래 확인된 장소 정보와 참고 후기 자료를 바탕으로, 실제 블로그에 바로 올릴 수 있는 현장감 있는 맛집 글을 작성하세요.
+참고 후기 자료는 글감을 잡기 위한 내부 메모입니다. 최종 글에서는 "리뷰 기반", "리뷰를 보면", "많은 방문자들이 공통적으로", "총 50개 리뷰" 같은 메타 표현을 쓰지 말고, 확인된 사실과 자연스러운 서술로 통합하세요.
 
-## 장소 정보:
+## 확인된 장소 정보:
 - 가게명: ${product.title}
-- 카테고리: ${product.category || product.brand}
+- 카테고리: ${firstNonEmptyText(product.category, product.brand)}
 - 설명: ${product.description || ""}
 ${placeInfo}${reviewsSection}
 
@@ -1025,25 +1070,26 @@ ${promptInstructionBlock}
 - 독자 렌즈 적용 지시: ${readerLens.instruction}
 - ${thisRestaurantAngleConfig!.titleFormat}
 - ${thisRestaurantAngleConfig!.h2Structure}
-- 전개 원칙: 전체 50개 리뷰 공통 패턴을 먼저 반영하고, 이번 리뷰 묶음에서 자주 나온 메뉴/분위기/주의점을 중심으로 세부 근거를 배치하며, 이전 글과 표현을 겹치지 말 것
+- 전개 원칙: 참고 후기 자료에서 반복된 메뉴/분위기/주의점을 바탕으로 글의 밀도를 높이되, 최종 문장은 메타 분석체가 아니라 자연스러운 블로그 문장으로 쓸 것
 
 ## 작성 규칙:
-1. 글 최상단에 <div class="summary-box"> 요약 박스 필수: 가게명/위치/분위기/추천 메뉴/가격대를 한눈에 파악할 수 있도록
+1. 글 최상단에 <div class="summary-box"> 요약 박스 필수: 가게명/위치/분위기/추천 메뉴/가격대를 한눈에 파악할 수 있도록. 확인된 전화/영업시간/대표메뉴/가격대가 있으면 반드시 반영할 것
 2. 첫 문단에서 사용자 프롬프트의 핵심 요청에 대한 한 문장 결론 먼저 제시 (Bottom Line Up Front)
 3. 위 구조 콘셉트의 제목 형식과 H2 순서를 반드시 지킬 것
-4. 실방문자 리뷰에서 반복되는 키워드/의견을 인용하여 "많은 방문자들이 공통적으로..." 형식으로 서술
+4. 참고 후기에서 반복되는 장점/주의점은 자연스러운 문장으로 녹이되 "리뷰 기반", "많은 방문자들이 공통적으로", "리뷰를 보면" 같은 메타 표현은 금지
 5. 대표 리뷰 근거 섹션의 포인트를 서로 다른 H2에 분산 배치하여 같은 문단 톤이 반복되지 않게 할 것
-6. 주소, 영업시간, 전화번호, 편의시설을 별도 인포박스(<div class="place-info">)에 정리
+6. 주소, 영업시간, 전화번호, 편의시설, 대표메뉴, 가격대를 별도 인포박스(<div class="place-info">)에 정리
 7. 장단점을 균형있게 서술 (단점 없으면 광고로 보임 → 신뢰도 하락)
-8. FAQ: "예약 필수인가요?", "주차 가능한가요?", "가격대는?" 등 실용적 질문 4개
-9. 구체적 수치: 대기시간, 가격대, 좌석 수, 영업시간 등 최대한 포함
+8. FAQ: "예약 필수인가요?", "주차 가능한가요?", "가격대는?", "대표 메뉴는?" 등 실용적 질문 4개
+9. 구체적 수치는 확인된 정보만 포함. 제공된 가격대, 메뉴명, 영업시간, 주소, 전화번호가 있으면 반드시 활용
 10. 2000~3000자 분량
 11. HTML 형식 (h2, h3, p, ul, li, strong, em, table 태그)
-12. 마지막에 방문 정보 총정리 <table> 필수 (항목: 위치, 영업시간, 전화, 주차, 예약여부, 가격대)
-13. 리뷰에 없는 웨이팅 시간, 메뉴 가격, 좌석 수는 임의로 확정하지 말고 "리뷰상", "현장 기준"처럼 범위/맥락형으로 적을 것
+12. 마지막에 방문 정보 총정리 <table> 필수 (항목: 위치, 영업시간, 전화, 주차, 예약여부, 가격대, 대표메뉴)
+13. 확인되지 않은 웨이팅 시간, 좌석 수, 예약 규정은 만들지 말고 해당 항목을 생략. 반대로 확인된 전화/가격/메뉴/주소/영업시간이 있으면 "정보 없음", "문의 필요", "확인 필요"를 절대 쓰지 말 것
 14. 리뷰 전문의 [리뷰#숫자]와 내부 인덱스는 작성용 메모일 뿐이며, 최종 HTML/제목/FAQ/요약문에 절대 노출하지 말 것
 15. 같은 배치의 다른 글과 겹치지 않도록, 도입부 비유·핵심 메뉴 선정·결론 문장·추천 대상 설명을 이번 글만의 방식으로 바꿀 것
-${placeHasReviewImages ? '16. 사진이 있는 리뷰는 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입하되, 이 placeholder 주석 외에는 리뷰 인덱스를 노출하지 말 것' : ""}
+16. 참고 후기 건수, 후기 키워드 횟수, "총 50개 리뷰", "방문자들이 공통적으로", "리뷰 데이터" 같은 메타 설명은 최종 HTML/제목/FAQ/요약문에 쓰지 말 것
+${placeHasReviewImages ? '17. 사진이 있는 리뷰는 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입하되, 이 placeholder 주석 외에는 리뷰 인덱스를 노출하지 말 것' : ""}
 
 ## GEO (AI 검색 최적화) 규칙:
 G1. 인용 가능 단락(Citable Passage): 각 H2 섹션 첫 부분에 해당 질문에 대한 완결된 답변을 3~5문장으로 작성할 것. 주변 맥락 없이 그 단락만 읽어도 의미가 통해야 함

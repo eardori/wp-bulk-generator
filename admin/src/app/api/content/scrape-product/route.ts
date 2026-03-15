@@ -429,6 +429,7 @@ async function scrapeNaverPlaceDirect(url: string): Promise<ScrapedProduct> {
   if (bridgeProduct?.specs?.tags?.trim() && !specs["키워드"]) {
     specs["키워드"] = bridgeProduct.specs.tags.trim();
   }
+  mergeBridgePlaceSpecs(specs, bridgeProduct?.specs);
   if (
     typeof summary?.coordinate?.latitude === "number" &&
     typeof summary?.coordinate?.longitude === "number"
@@ -447,7 +448,11 @@ async function scrapeNaverPlaceDirect(url: string): Promise<ScrapedProduct> {
     url,
     title,
     description: descriptionParts.join(" | "),
-    price: "",
+    price: firstNonEmpty(
+      bridgeProduct?.price,
+      bridgeProduct?.specs?.priceRange,
+      specs["가격대"]
+    ),
     images,
     specs,
     reviews: reviews.map((review) => ({
@@ -695,6 +700,43 @@ function mergeUniqueStrings(...lists: string[][]): string[] {
   }
 
   return merged;
+}
+
+function firstNonEmpty(...values: Array<string | null | undefined>): string {
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function mergeBridgePlaceSpecs(
+  specs: Record<string, string>,
+  bridgeSpecs?: Record<string, string>
+) {
+  if (!bridgeSpecs) {
+    return;
+  }
+
+  const mappings: Array<[string, string]> = [
+    ["phone", "전화"],
+    ["hours", "영업시간"],
+    ["facilities", "편의시설"],
+    ["directions", "찾아가는길"],
+    ["tags", "키워드"],
+    ["menuSummary", "대표메뉴"],
+    ["priceRange", "가격대"],
+  ];
+
+  for (const [sourceKey, targetKey] of mappings) {
+    const value = bridgeSpecs[sourceKey]?.trim();
+    if (value && !specs[targetKey]) {
+      specs[targetKey] = value;
+    }
+  }
 }
 
 function buildNaverPlaceKeywordSummary(reviews: NaverPlaceGraphqlReview[]): string {
