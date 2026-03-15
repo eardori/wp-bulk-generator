@@ -21,6 +21,20 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+ensure_nginx_hash_settings() {
+  local nginx_conf="/etc/nginx/nginx.conf"
+
+  if [ ! -f "$nginx_conf" ]; then
+    return 0
+  fi
+
+  perl -0pi -e '
+    s/^\h*server_names_hash_max_size\h+\d+;\n?//mg;
+    s/^\h*server_names_hash_bucket_size\h+\d+;\n?//mg;
+    s/(^\h*types_hash_max_size\h+\d+;\n)/$1    server_names_hash_max_size 4096;\n    server_names_hash_bucket_size 128;\n/m;
+  ' "$nginx_conf"
+}
+
 cert_covers_domain() {
   local domain="$1"
 
@@ -78,6 +92,66 @@ resolve_upstream_target() {
   fi
 
   printf '%s' "$host"
+}
+
+ensure_allmyreview_certificate() {
+  if ! command -v certbot >/dev/null 2>&1; then
+    echo "  ⚠ certbot이 없어 primary SSL 확장을 건너뜁니다."
+    return 0
+  fi
+
+  if [ "${#cert_domains[@]}" -eq 0 ]; then
+    echo "  ⚠ allmyreview 도메인이 없어 primary SSL 확장을 건너뜁니다."
+    return 0
+  fi
+
+  if [ "${#cert_domains[@]}" -gt "$ALLMYREVIEW_CERT_MAX_NAMES" ]; then
+    echo "  ⚠ allmyreview 도메인이 ${#cert_domains[@]}개로 많습니다. wildcard 인증서 전환이 필요합니다."
+    return 0
+  fi
+
+  missing=()
+  for domain in "${cert_domains[@]}"; do
+    if ! cert_covers_domain "$domain"; then
+      missing+=("$domain")
+    fi
+  done
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    echo "  ✓ primary SSL 도메인 포함 상태 정상"
+    return 0
+  fi
+
+  echo "--- primary SSL 확장 (${#missing[@]}개 신규) ---"
+  printf '  + %s\n' "${missing[@]}"
+
+  certbot_args=(
+    certbot certonly
+    --webroot
+    -w "$ACME_WEBROOT"
+    --non-interactive
+    --cert-name "$ALLMYREVIEW_CERT_NAME"
+  )
+
+  if [ -n "$CERTBOT_EMAIL" ]; then
+    certbot_args+=(--agree-tos --email "$CERTBOT_EMAIL")
+  else
+    certbot_args+=(--agree-tos --register-unsafely-without-email)
+  fi
+
+  if [ -f "$ALLMYREVIEW_CERT_DIR/fullchain.pem" ]; then
+    certbot_args+=(--expand)
+  fi
+
+  for domain in "${cert_domains[@]}"; do
+    certbot_args+=(-d "$domain")
+  done
+
+  if "${certbot_args[@]}"; then
+    echo "  ✓ primary SSL 확장 완료"
+  else
+    echo "  ⚠ primary SSL 확장 실패"
+  fi
 }
 
 write_proxy_config() {
@@ -165,14 +239,13 @@ NGINX
 }
 
 declare -a entries=()
-declare -a domains=()
+declare -a cert_domains=()
 
 while IFS=$'\t' read -r slug domain upstream_host ssh_user key_path; do
   [ -n "$slug" ] || continue
   [ -n "$domain" ] || continue
   [ -n "$upstream_host" ] || continue
   entries+=("${slug}"$'\t'"${domain}"$'\t'"${upstream_host}"$'\t'"${ssh_user}"$'\t'"${key_path}")
-  domains+=("$domain")
 done < <(
   jq -r '
     .[]?
@@ -180,6 +253,18 @@ done < <(
     | select(.slug and .domain and .server_host)
     | [.slug, .domain, .server_host, (.server_user // ""), (.server_key_path // "")] | @tsv
   ' "$CREDS_FILE"
+)
+
+while IFS= read -r domain; do
+  [ -n "$domain" ] || continue
+  cert_domains+=("$domain")
+done < <(
+  jq -r '
+    .[]?
+    | .domain // empty
+    | ascii_downcase
+    | select(endswith(".allmyreview.site"))
+  ' "$CREDS_FILE" | sort -u
 )
 
 declare -A active=()
@@ -199,7 +284,9 @@ done
 shopt -u nullglob
 
 if [ "${#entries[@]}" -eq 0 ]; then
+  ensure_nginx_hash_settings
   nginx -t && systemctl reload nginx
+  ensure_allmyreview_certificate
   echo "✓ secondary proxy 대상 사이트 없음"
   exit 0
 fi
@@ -217,57 +304,10 @@ for entry in "${entries[@]}"; do
   echo "  + $domain -> $upstream_target"
 done
 
+ensure_nginx_hash_settings
 nginx -t && systemctl reload nginx
 
-if command -v certbot >/dev/null 2>&1; then
-  if [ "${#domains[@]}" -le "$ALLMYREVIEW_CERT_MAX_NAMES" ]; then
-    missing=()
-    for domain in "${domains[@]}"; do
-      if ! cert_covers_domain "$domain"; then
-        missing+=("$domain")
-      fi
-    done
-
-    if [ "${#missing[@]}" -gt 0 ]; then
-      echo "--- primary SSL 확장 (${#missing[@]}개 신규) ---"
-      printf '  + %s\n' "${missing[@]}"
-
-      certbot_args=(
-        certbot certonly
-        --webroot
-        -w "$ACME_WEBROOT"
-        --non-interactive
-        --cert-name "$ALLMYREVIEW_CERT_NAME"
-      )
-
-      if [ -n "$CERTBOT_EMAIL" ]; then
-        certbot_args+=(--agree-tos --email "$CERTBOT_EMAIL")
-      else
-        certbot_args+=(--agree-tos --register-unsafely-without-email)
-      fi
-
-      if [ -f "$ALLMYREVIEW_CERT_DIR/fullchain.pem" ]; then
-        certbot_args+=(--expand)
-      fi
-
-      for domain in "${domains[@]}"; do
-        certbot_args+=(-d "$domain")
-      done
-
-      if "${certbot_args[@]}"; then
-        echo "  ✓ primary SSL 확장 완료"
-      else
-        echo "  ⚠ primary SSL 확장 실패"
-      fi
-    else
-      echo "  ✓ primary SSL 도메인 포함 상태 정상"
-    fi
-  else
-    echo "  ⚠ secondary proxy 도메인이 ${#domains[@]}개로 많습니다. wildcard 인증서 전환이 필요합니다."
-  fi
-else
-  echo "  ⚠ certbot이 없어 primary SSL 확장을 건너뜁니다."
-fi
+ensure_allmyreview_certificate
 
 echo "--- secondary proxy HTTPS 구성 ---"
 for entry in "${entries[@]}"; do

@@ -78,7 +78,6 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
   const enabledCount = configs.filter((c) => c.enabled).length;
   const visibleConfigs = configs.filter((config) => filteredSiteSlugs.has(config.siteSlug));
   const visibleEnabledCount = visibleConfigs.filter((config) => config.enabled).length;
-  const allEnabledInView = visibleConfigs.length > 0 && visibleConfigs.every((config) => config.enabled);
 
   const toggleEnabled = (slug: string) =>
     setConfigs((prev) => prev.map((c) => (c.siteSlug === slug ? { ...c, enabled: !c.enabled } : c)));
@@ -96,12 +95,15 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
       )
     );
 
-  const toggleAll = () =>
+  const clearAll = () =>
+    setConfigs((prev) => prev.map((config) => ({ ...config, enabled: false })));
+
+  const selectVisibleOnly = () =>
     setConfigs((prev) =>
       prev.map((config) =>
-        filteredSiteSlugs.has(config.siteSlug)
-          ? { ...config, enabled: !allEnabledInView }
-          : config
+        activeServerTab === "all"
+          ? { ...config, enabled: true }
+          : { ...config, enabled: filteredSiteSlugs.has(config.siteSlug) }
       )
     );
 
@@ -178,10 +180,16 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
         </div>
         <div className="flex-1" />
         <button
-          onClick={toggleAll}
+          onClick={clearAll}
+          className="text-xs text-gray-400 hover:text-gray-200 transition-colors whitespace-nowrap"
+        >
+          전체 해제
+        </button>
+        <button
+          onClick={selectVisibleOnly}
           className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors whitespace-nowrap"
         >
-          {allEnabledInView ? "탭 전체 해제" : "탭 전체 선택"}
+          {activeServerTab === "all" ? "전체 선택" : `${getServerGroupLabel(activeServerTab)}만 선택`}
         </button>
         <span className="text-xs text-gray-500 whitespace-nowrap">
           전체 {enabledCount}/{sites.length}개

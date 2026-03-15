@@ -188,6 +188,8 @@ http {
     tcp_nodelay on;
     keepalive_timeout 30;
     types_hash_max_size 2048;
+    server_names_hash_max_size 4096;
+    server_names_hash_bucket_size 128;
     server_tokens off;
 
     include /etc/nginx/mime.types;
