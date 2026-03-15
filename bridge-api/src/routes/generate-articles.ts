@@ -717,41 +717,20 @@ function buildPlaceReviewPromptSection(reviews: ProductReview[], articleVariatio
   const indexedReviews = buildIndexedReviews(reviews, articleVariation, 20, 6);
   if (indexedReviews.length === 0) return "";
 
-  const averageRating = Math.round(
-    (indexedReviews.reduce((sum, { review }) => sum + review.rating, 0) / indexedReviews.length) * 10
-  ) / 10;
-  const positiveCount = indexedReviews.filter(({ review }) => review.rating >= 4).length;
-  const optionCounts = Array.from(
-    indexedReviews.reduce((acc, { review }) => {
-      const option = review.purchaseOption?.trim();
-      if (option) acc.set(option, (acc.get(option) || 0) + 1);
-      return acc;
-    }, new Map<string, number>())
-  ).sort((a, b) => b[1] - a[1]);
   const representativeReviews = pickRepresentativeReviews(indexedReviews);
 
-  let section = `\n\n## 참고 후기 자료 요약 (내부 참고용):\n`;
-  section += `- 아래 내용은 글감 정리용 참고 메모입니다. 최종 글에는 "리뷰 기반", "총 50개 리뷰", "방문자들이 공통적으로" 같은 메타 표현을 쓰지 마세요.\n`;
-  section += buildDirectReviewCoverageSummary(reviews, "참고 자료 전체 패턴");
-  section += `- 이번 글에 전달된 리뷰: ${indexedReviews.length}건\n`;
-  section += `- 이번 리뷰 묶음 평균 평점: ${averageRating}점\n`;
-  section += `- 만족 리뷰 비율(4~5점): ${formatPercent(positiveCount, indexedReviews.length)}%\n`;
-
-  if (optionCounts.length > 0) {
-    section += `- 자주 언급된 메뉴/옵션: ${optionCounts
-      .slice(0, 4)
-      .map(([option, count]) => `${option}(${count})`)
-      .join(", ")}\n`;
-  }
+  let section = `\n\n## 후기 원문 참고 (팩트 확인용):\n`;
+  section += `- 아래 후기는 메뉴명, 맛 표현, 서비스, 공간, 좌석, 대기, 주차, 발렛, 룸처럼 후기 문장 안에 직접 적힌 사실만 참고하세요.\n`;
+  section += `- 후기 건수, 통계, "많은 방문자들이", "리뷰 기반" 같은 메타 해석은 최종 글에 쓰지 마세요.\n`;
 
   if (representativeReviews.length > 0) {
-    section += `\n### 참고 메모:\n`;
+    section += `\n### 먼저 볼 사실 메모:\n`;
     for (const { label, item } of representativeReviews) {
       section += `- ${label}: ${truncateText(item.review.text, 110)}\n`;
     }
   }
 
-  section += `\n### 참고 후기 원문 (${indexedReviews.length}건, 아래 번호는 내부 이미지 매핑용이며 최종 글에 노출 금지):\n`;
+  section += `\n### 후기 원문 발췌 (${indexedReviews.length}건, 아래 번호는 내부 이미지 매핑용이며 최종 글에 노출 금지):\n`;
   for (const { globalIndex, review } of indexedReviews) {
     const optionLabel = review.purchaseOption?.trim() ? ` | 메뉴/옵션: ${review.purchaseOption.trim()}` : "";
     const dateLabel = review.date?.trim() ? ` | 날짜: ${review.date.slice(0, 10)}` : "";
@@ -1034,33 +1013,25 @@ ${normalizedPrompt}
     const reviewsSection = buildPlaceReviewPromptSection(product.reviews, articleVariation);
     const placeHasReviewImages = product.reviews.some((review) => (review.images?.length || 0) > 0);
     const restaurantFacts = buildRestaurantFactMap(product);
-    const placeInfo = [
-      restaurantFacts.address && `주소: ${restaurantFacts.address}`,
-      restaurantFacts.lotAddress && `지번주소: ${restaurantFacts.lotAddress}`,
-      restaurantFacts.region && `지역: ${restaurantFacts.region}`,
-      restaurantFacts.phone && `전화: ${restaurantFacts.phone}`,
-      restaurantFacts.hours && `영업시간: ${restaurantFacts.hours}`,
-      restaurantFacts.facilities && `편의시설: ${restaurantFacts.facilities}`,
-      restaurantFacts.directions && `찾아가는길: ${restaurantFacts.directions}`,
-      restaurantFacts.menuSummary && `대표메뉴: ${restaurantFacts.menuSummary}`,
-      restaurantFacts.priceRange && `가격대: ${restaurantFacts.priceRange}`,
-      restaurantFacts.keywords && `특징키워드: ${restaurantFacts.keywords}`,
-      restaurantFacts.naverReviewSummary && `장소 요약: ${restaurantFacts.naverReviewSummary}`,
-      restaurantFacts.blogReviewCount && `블로그 리뷰 수: ${restaurantFacts.blogReviewCount}`,
+    const supportFacts = [
+      restaurantFacts.menuSummary && `- 참고 가능한 메뉴명: ${restaurantFacts.menuSummary}`,
+      restaurantFacts.priceRange && `- 참고 가능한 가격대: ${restaurantFacts.priceRange}`,
+      restaurantFacts.address && `- 참고 가능한 주소: ${restaurantFacts.address}`,
+      restaurantFacts.phone && `- 참고 가능한 전화번호: ${restaurantFacts.phone}`,
     ].filter(Boolean).join("\n");
 
     const restaurantPrompt = `당신은 "${persona.name}"입니다. ${persona.bio || ""}
 나이: ${persona.age}세 | 글쓰기 톤: ${persona.tone}
 ${variationHint}
 
-아래 확인된 장소 정보와 참고 후기 자료를 바탕으로, 실제 블로그에 바로 올릴 수 있는 현장감 있는 맛집 글을 작성하세요.
-참고 후기 자료는 글감을 잡기 위한 내부 메모입니다. 최종 글에서는 "리뷰 기반", "리뷰를 보면", "많은 방문자들이 공통적으로", "총 50개 리뷰" 같은 메타 표현을 쓰지 말고, 확인된 사실과 자연스러운 서술로 통합하세요.
+아래 사용자 프롬프트를 가장 우선으로 보고, 참고 후기 원문에서 직접 확인되는 사실만 보조 근거로 사용해 실제 블로그에 바로 올릴 수 있는 맛집 글을 작성하세요.
+스크랩 데이터는 사진/기본 식별용 참고 자료로만 취급하세요. 프롬프트에 이미 적힌 내용보다 스크랩 데이터를 우선하지 마세요.
 
-## 확인된 장소 정보:
+## 기본 식별 정보:
 - 가게명: ${product.title}
 - 카테고리: ${firstNonEmptyText(product.category, product.brand)}
 - 설명: ${product.description || ""}
-${placeInfo}${reviewsSection}
+${supportFacts ? `\n## 보조 참고용 스크랩 정보 (필요할 때만 사용):\n${supportFacts}\n` : ""}${reviewsSection}
 
 ${promptInstructionBlock}
 
@@ -1070,25 +1041,25 @@ ${promptInstructionBlock}
 - 독자 렌즈 적용 지시: ${readerLens.instruction}
 - ${thisRestaurantAngleConfig!.titleFormat}
 - ${thisRestaurantAngleConfig!.h2Structure}
-- 전개 원칙: 참고 후기 자료에서 반복된 메뉴/분위기/주의점을 바탕으로 글의 밀도를 높이되, 최종 문장은 메타 분석체가 아니라 자연스러운 블로그 문장으로 쓸 것
+- 전개 원칙: 사용자 프롬프트를 중심으로 글을 전개하고, 후기 원문에 직접 적힌 메뉴/분위기/서비스/공간 관련 사실만 필요한 만큼 덧붙일 것
 
 ## 작성 규칙:
-1. 글 최상단에 <div class="summary-box"> 요약 박스 필수: 가게명/위치/분위기/추천 메뉴/가격대를 한눈에 파악할 수 있도록. 확인된 전화/영업시간/대표메뉴/가격대가 있으면 반드시 반영할 것
+1. 글 최상단에 <div class="summary-box"> 요약 박스 필수: 사용자 프롬프트에서 강조한 핵심 정보와 결론을 가장 먼저 보여줄 것
 2. 첫 문단에서 사용자 프롬프트의 핵심 요청에 대한 한 문장 결론 먼저 제시 (Bottom Line Up Front)
 3. 위 구조 콘셉트의 제목 형식과 H2 순서를 반드시 지킬 것
-4. 참고 후기에서 반복되는 장점/주의점은 자연스러운 문장으로 녹이되 "리뷰 기반", "많은 방문자들이 공통적으로", "리뷰를 보면" 같은 메타 표현은 금지
+4. 사용자 프롬프트에 적은 발렛, 룸, 주차, 예약, 방문 팁, 분위기 정보는 그대로 반영하고, 스크랩에 없다는 이유로 "정보 없음", "문의 필요", "확인 필요"라고 쓰지 말 것
 5. 대표 리뷰 근거 섹션의 포인트를 서로 다른 H2에 분산 배치하여 같은 문단 톤이 반복되지 않게 할 것
-6. 주소, 영업시간, 전화번호, 편의시설, 대표메뉴, 가격대를 별도 인포박스(<div class="place-info">)에 정리
+6. 후기 원문은 메뉴명, 맛, 서비스, 공간, 대기, 좌석, 주차, 발렛, 룸처럼 문장 안에 직접 적힌 사실만 참고하고, 후기 건수/통계/공통 패턴 서술은 금지
 7. 장단점을 균형있게 서술 (단점 없으면 광고로 보임 → 신뢰도 하락)
-8. FAQ: "예약 필수인가요?", "주차 가능한가요?", "가격대는?", "대표 메뉴는?" 등 실용적 질문 4개
-9. 구체적 수치는 확인된 정보만 포함. 제공된 가격대, 메뉴명, 영업시간, 주소, 전화번호가 있으면 반드시 활용
+8. 주소, 영업시간, 전화번호, 대표메뉴, 가격대 같은 운영 정보는 사용자 프롬프트에 있으면 그대로 쓰고, 프롬프트에 없더라도 보조 참고용 스크랩 정보가 있을 때만 선택적으로 사용할 것
+9. FAQ는 사용자 프롬프트에서 중요하게 다룬 정보 위주로 4개 작성하고, 없는 항목을 억지로 채우지 말 것
 10. 2000~3000자 분량
 11. HTML 형식 (h2, h3, p, ul, li, strong, em, table 태그)
-12. 마지막에 방문 정보 총정리 <table> 필수 (항목: 위치, 영업시간, 전화, 주차, 예약여부, 가격대, 대표메뉴)
-13. 확인되지 않은 웨이팅 시간, 좌석 수, 예약 규정은 만들지 말고 해당 항목을 생략. 반대로 확인된 전화/가격/메뉴/주소/영업시간이 있으면 "정보 없음", "문의 필요", "확인 필요"를 절대 쓰지 말 것
+12. 마지막 정보 정리 <table>은 사용자 프롬프트나 후기 원문에 실제로 들어 있는 항목만 넣고, 빈 행이나 "정보 없음" 행은 만들지 말 것
+13. 후기 원문과 프롬프트에 없는 내용은 만들지 말 것. 다만 사용자 프롬프트에 명시된 정보는 사실값으로 취급하고 그대로 반영할 것
 14. 리뷰 전문의 [리뷰#숫자]와 내부 인덱스는 작성용 메모일 뿐이며, 최종 HTML/제목/FAQ/요약문에 절대 노출하지 말 것
 15. 같은 배치의 다른 글과 겹치지 않도록, 도입부 비유·핵심 메뉴 선정·결론 문장·추천 대상 설명을 이번 글만의 방식으로 바꿀 것
-16. 참고 후기 건수, 후기 키워드 횟수, "총 50개 리뷰", "방문자들이 공통적으로", "리뷰 데이터" 같은 메타 설명은 최종 HTML/제목/FAQ/요약문에 쓰지 말 것
+16. 참고 후기 건수, 후기 키워드 횟수, "총 50개 리뷰", "방문자들이 공통적으로", "리뷰 데이터", "리뷰를 보면" 같은 메타 설명은 최종 HTML/제목/FAQ/요약문에 쓰지 말 것
 ${placeHasReviewImages ? '17. 사진이 있는 리뷰는 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입하되, 이 placeholder 주석 외에는 리뷰 인덱스를 노출하지 말 것' : ""}
 
 ## GEO (AI 검색 최적화) 규칙:
