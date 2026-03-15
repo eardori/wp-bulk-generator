@@ -23,6 +23,10 @@ const DEPLOY_SCRIPT =
 const SECONDARY_PROXY_SYNC_SCRIPT =
   process.env.SECONDARY_PROXY_SYNC_SCRIPT ||
   join(getPrimaryServerTarget().repoRoot, "scripts", "sync-secondary-proxies.sh");
+const MIN_BATCH_FREE_KB_HEADROOM =
+  Number(process.env.MIN_BATCH_FREE_KB_HEADROOM || 524288);
+const ESTIMATED_SITE_DISK_KB =
+  Number(process.env.ESTIMATED_SITE_DISK_KB || 153600);
 
 type DeployConfig = {
   site_slug?: string;
@@ -115,6 +119,61 @@ function writeJson(path: string, data: unknown) {
     mkdirSync(dir, { recursive: true });
   }
   writeFileSync(path, JSON.stringify(data, null, 2));
+}
+
+function parseFreeDiskKb(raw: string) {
+  const value = Number(String(raw).trim());
+  return Number.isFinite(value) ? value : 0;
+}
+
+function getTargetFreeDiskKb(target: ServerTarget) {
+  if (!isRemoteTarget(target)) {
+    const raw = execSync("df -Pk / | awk 'NR==2 {print $4}'", {
+      timeout: 10000,
+    }).toString();
+    return parseFreeDiskKb(raw);
+  }
+
+  const raw = execSsh(target, "df -Pk / | awk 'NR==2 {print $4}'", 15000);
+  return parseFreeDiskKb(raw);
+}
+
+function estimateRequiredDiskKb(siteCount: number) {
+  return MIN_BATCH_FREE_KB_HEADROOM + siteCount * ESTIMATED_SITE_DISK_KB;
+}
+
+function pickDeployTarget(siteCount: number): {
+  target: ServerTarget;
+  message?: string;
+} {
+  const preferred = getDefaultDeployTarget();
+  const requiredKb = estimateRequiredDiskKb(siteCount);
+  const preferredFreeKb = getTargetFreeDiskKb(preferred);
+
+  if (preferredFreeKb >= requiredKb) {
+    return { target: preferred };
+  }
+
+  const primary = getPrimaryServerTarget();
+  if (isRemoteTarget(preferred) && preferred.id !== primary.id) {
+    const primaryFreeKb = getTargetFreeDiskKb(primary);
+    if (primaryFreeKb >= requiredKb) {
+      return {
+        target: primary,
+        message:
+          `기본 배포 서버(${preferred.host}) 디스크가 부족해 기존 서버로 우회합니다. ` +
+          `(필요 약 ${Math.ceil(requiredKb / 1024)}MB, ` +
+          `${preferred.host} 여유 약 ${Math.floor(preferredFreeKb / 1024)}MB, ` +
+          `기존 서버 여유 약 ${Math.floor(primaryFreeKb / 1024)}MB)`,
+      };
+    }
+  }
+
+  throw new Error(
+    `배포 서버 디스크 공간이 부족합니다. ` +
+      `(필요 약 ${Math.ceil(requiredKb / 1024)}MB, ` +
+      `${preferred.id}${preferred.host ? ` ${preferred.host}` : ""} 여유 약 ${Math.floor(preferredFreeKb / 1024)}MB)`
+  );
 }
 
 function getCredentialKey(site: DeployConfig): string {
@@ -508,12 +567,17 @@ export async function deployRoutes(app: FastifyInstance) {
         return;
       }
 
-      const deployTarget = getDefaultDeployTarget();
+      const { target: deployTarget, message: targetSelectionMessage } =
+        pickDeployTarget(deployableConfigs.length);
       const configsToPersist = deployableConfigs.map((config) =>
         isRemoteTarget(deployTarget)
           ? { ...config, server_id: deployTarget.id }
           : config
       );
+
+      if (targetSelectionMessage) {
+        send({ type: "log", message: targetSelectionMessage });
+      }
 
       send({
         type: "progress",

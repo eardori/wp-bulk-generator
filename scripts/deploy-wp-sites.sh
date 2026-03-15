@@ -582,8 +582,40 @@ ensure_wordpress_runtime_config() {
   wp_try config set DISABLE_WP_CRON true --raw --type=constant --path="$site_dir" --allow-root --quiet 2>/dev/null || true
 
   if [ -f "$wp_config" ] && ! grep -q "HTTP_X_FORWARDED_PROTO" "$wp_config" 2>/dev/null; then
-    sed -i "/require_once ABSPATH . 'wp-settings.php';/i if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) \\&\\& strpos(\$_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) { \$_SERVER['HTTPS'] = 'on'; }\nif (isset(\$_SERVER['HTTP_X_FORWARDED_HOST']) \\&\\& \$_SERVER['HTTP_X_FORWARDED_HOST'] !== '') { \$_SERVER['HTTP_HOST'] = \$_SERVER['HTTP_X_FORWARDED_HOST']; }" "$wp_config"
+    php -r '
+      $path = $argv[1];
+      $needle = "require_once ABSPATH . '\''wp-settings.php'\'';";
+      $insert = <<<'\''PHP'\''
+if (isset($_SERVER['\''HTTP_X_FORWARDED_PROTO'\'']) && strpos($_SERVER['\''HTTP_X_FORWARDED_PROTO'\''], '\''https'\'') !== false) { $_SERVER['\''HTTPS'\''] = '\''on'\''; }
+if (isset($_SERVER['\''HTTP_X_FORWARDED_HOST'\'']) && $_SERVER['\''HTTP_X_FORWARDED_HOST'\''] !== '\'\'') { $_SERVER['\''HTTP_HOST'\''] = $_SERVER['\''HTTP_X_FORWARDED_HOST'\'']; }
+PHP;
+      $contents = @file_get_contents($path);
+      if ($contents === false || strpos($contents, "HTTP_X_FORWARDED_PROTO") !== false) {
+        exit(0);
+      }
+      $updated = str_replace($needle, $insert . "\n" . $needle, $contents, $count);
+      if ($count > 0) {
+        file_put_contents($path, $updated);
+      }
+    ' "$wp_config" >/dev/null 2>&1 || true
   fi
+}
+
+ensure_site_install_capacity() {
+  local min_free_kb="${MIN_SITE_FREE_KB:-262144}"
+  local available_kb
+  available_kb=$(df -Pk "$WEB_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')
+
+  if [ -z "$available_kb" ] || ! [[ "$available_kb" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  if [ "$available_kb" -lt "$min_free_kb" ]; then
+    SITE_LAST_ERROR="디스크 공간 부족 (${available_kb}KB 남음)"
+    return 1
+  fi
+
+  return 0
 }
 
 ensure_plugin_active() {
@@ -860,6 +892,8 @@ install_site_once() {
     echo "  ⏭ [$((i+1))/$SITE_COUNT] $SLUG 이미 완료됨 — 건너뜀"
     return 0
   fi
+
+  ensure_site_install_capacity || return 1
 
   # ---- 1. DB 생성 ----
   echo "  [1/7] DB 생성..."
