@@ -27,6 +27,10 @@ const MIN_BATCH_FREE_KB_HEADROOM =
   Number(process.env.MIN_BATCH_FREE_KB_HEADROOM || 524288);
 const ESTIMATED_SITE_DISK_KB =
   Number(process.env.ESTIMATED_SITE_DISK_KB || 153600);
+const DEPLOY_CACHE_WARM_TIMEOUT_MS =
+  Number(process.env.DEPLOY_CACHE_WARM_TIMEOUT_MS || 12000);
+const DEPLOY_CACHE_WARM_CONCURRENCY =
+  Math.max(1, Number(process.env.DEPLOY_CACHE_WARM_CONCURRENCY || 4));
 
 type DeployConfig = {
   site_slug?: string;
@@ -257,6 +261,50 @@ function applyTargetMetadata(
     server_site_root: target.siteRoot,
     server_repo_root: target.repoRoot,
   }));
+}
+
+function buildSiteWarmTargets(siteUrl: string): string[] {
+  const baseUrl = siteUrl.replace(/\/$/, "");
+  return [
+    `${baseUrl}/`,
+    `${baseUrl}/robots.txt`,
+    `${baseUrl}/sitemap_index.xml`,
+    `${baseUrl}/wp-sitemap.xml`,
+  ];
+}
+
+async function warmDeployedSites(
+  sites: Array<{ url: string }>
+): Promise<void> {
+  const urls = Array.from(
+    new Set(
+      sites.flatMap((site) => buildSiteWarmTargets(site.url)).filter(Boolean)
+    )
+  );
+
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(DEPLOY_CACHE_WARM_CONCURRENCY, urls.length) },
+    async () => {
+      while (cursor < urls.length) {
+        const index = cursor++;
+        const url = urls[index];
+        try {
+          const res = await fetch(url, {
+            method: "GET",
+            cache: "no-store",
+            headers: { "User-Agent": "WPBulkDeployWarmer/1.0" },
+            signal: AbortSignal.timeout(DEPLOY_CACHE_WARM_TIMEOUT_MS),
+          });
+          await res.arrayBuffer();
+        } catch {
+          // best-effort cache warm
+        }
+      }
+    }
+  );
+
+  await Promise.allSettled(workers);
 }
 
 function syncLocalCaches(credentials: StoredCredential[], configs: DeployConfig[]) {
@@ -736,8 +784,9 @@ export async function deployRoutes(app: FastifyInstance) {
       );
 
       if (credentialsSummary) {
-        const cacheSeedEntries = credentialsSummary.sites
+        const successfulSites = credentialsSummary.sites
           .filter((site) => successfulSlugs.size === 0 || successfulSlugs.has(site.slug))
+        const cacheSeedEntries = successfulSites
           .map((site) => ({
             slug: site.slug,
             entry: {
@@ -750,6 +799,10 @@ export async function deployRoutes(app: FastifyInstance) {
 
         if (cacheSeedEntries.length > 0) {
           await seedDashboardSiteCaches(cacheSeedEntries);
+        }
+
+        if (successfulSites.length > 0) {
+          void warmDeployedSites(successfulSites);
         }
 
         send({ type: "credentials", credentials: credentialsSummary });

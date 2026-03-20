@@ -9,12 +9,53 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
-def build_urls(cache_path: Path) -> list[str]:
-    payload = json.loads(cache_path.read_text())
+DEFAULT_CREDENTIAL_PATHS = [
+    "/home/ubuntu/wp-bulk-generator/bridge-api/data/wp-sites-credentials.json",
+    "/home/ubuntu/wp-bulk-generator/admin/.cache/sites-credentials.json",
+    "/root/wp-sites-credentials.json",
+]
+
+
+def build_site_targets(base: str) -> list[str]:
+    return [
+        base,
+        f"{base}robots.txt",
+        f"{base}sitemap_index.xml",
+        f"{base}wp-sitemap.xml",
+    ]
+
+
+def read_json_if_exists(path: Path) -> object:
+    if not path.exists():
+        return []
+    return json.loads(path.read_text())
+
+
+def build_urls(cache_path: Path, credentials_path: Path | None = None) -> list[str]:
+    payload = read_json_if_exists(cache_path)
     seen = set()
     urls: list[str] = []
 
-    for site in payload.get("sites", {}).values():
+    credentials = read_json_if_exists(credentials_path) if credentials_path else []
+
+    for site in credentials if isinstance(credentials, list) else []:
+        url = (site or {}).get("url")
+        domain = (site or {}).get("domain")
+        if url:
+            base = url.rstrip("/") + "/"
+        elif domain:
+            scheme = "https" if str(domain).endswith(".allmyreview.site") else "http"
+            base = f"{scheme}://{domain}/"
+        else:
+            continue
+
+        for target in build_site_targets(base):
+            if target in seen:
+                continue
+            seen.add(target)
+            urls.append(target)
+
+    for site in payload.get("sites", {}).values() if isinstance(payload, dict) else []:
         posts = site.get("posts") or []
         for post in posts:
             link = (post or {}).get("link")
@@ -24,7 +65,7 @@ def build_urls(cache_path: Path) -> list[str]:
             parsed = urlsplit(link)
             base = f"{parsed.scheme}://{parsed.netloc}/"
 
-            for url in (base, link):
+            for url in [*build_site_targets(base), link]:
                 if url in seen:
                     continue
                 seen.add(url)
@@ -71,6 +112,11 @@ def main() -> int:
         help="Path to dashboard cache JSON",
     )
     parser.add_argument(
+        "--credentials-file",
+        default="",
+        help="Optional path to merged site credentials JSON",
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=180,
@@ -91,7 +137,17 @@ def main() -> int:
     args = parser.parse_args()
 
     cache_path = Path(args.cache_file)
-    urls = build_urls(cache_path)
+    credentials_path = None
+    if args.credentials_file:
+        credentials_path = Path(args.credentials_file)
+    else:
+        for candidate in DEFAULT_CREDENTIAL_PATHS:
+            path = Path(candidate)
+            if path.exists():
+                credentials_path = path
+                break
+
+    urls = build_urls(cache_path, credentials_path)
     if args.limit > 0:
         urls = urls[: args.limit]
 
