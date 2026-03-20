@@ -55,6 +55,7 @@ WP_CRON_SCHEDULE_PATH="${WP_CRON_SCHEDULE_PATH:-/etc/cron.d/wp-bulk-run-cron}"
 WP_CLI_TIMEOUT="${WP_CLI_TIMEOUT:-30}"
 POST_DEPLOY_REPAIR_SCRIPT="${POST_DEPLOY_REPAIR_SCRIPT:-$SCRIPT_DIR/backfill-existing-sites.sh}"
 INDEXNOW_KEY_FILE="${INDEXNOW_KEY_FILE:-/root/.wp-bulk-indexnow-key}"
+SCANNER_BLOCK_SNIPPET="${SCANNER_BLOCK_SNIPPET:-/etc/nginx/snippets/wp-bulk-scanner-blocks.conf}"
 
 # 앱/브리지 캐시 경로
 APP_CACHE_DIR="${APP_CACHE_DIR:-$REPO_ROOT/admin/.cache}"
@@ -73,6 +74,20 @@ sync_cache() {
   # EC2 Agent가 읽는 경로에도 동기화
   cp "$CREDS_FILE" "$BRIDGE_CREDS_FILE" 2>/dev/null || true
   chown "$APP_FILE_OWNER" "$BRIDGE_CREDS_FILE" 2>/dev/null || true
+}
+
+ensure_scanner_block_snippet() {
+  mkdir -p "$(dirname "$SCANNER_BLOCK_SNIPPET")"
+  cat > "$SCANNER_BLOCK_SNIPPET" <<'NGINX'
+# Fast reject common scanner and fake app routes before they hit PHP.
+location = /index.html { return 404; }
+location = /sitemap.xml { return 404; }
+location ~* ^/(?:\.env|config(?:\.|/|$)|storage/|backup/|secrets(?:\.json|\.txt)?$|credentials(?:\.json|\.txt)?$|server-info$|swagger\.json$|manifest\.json$|info\.php$|debug/default/view$|webhooks/settings\.json$|aws/credentials$|api/payment/config$|api/shared/config/|manage/env$|stripe(?:\.json|\.conf|\.rb|\.env|/)|wp-content/uploads/wc-logs/|checkout$|cart$|billing$|signup$|register$|subscribe$|payment$|donate$|plans$|pricing$|order$|account$|shop$|dashboard$|admin$) {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+NGINX
 }
 
 wp_try() {
@@ -455,6 +470,7 @@ server {
     add_header X-Content-Type-Options nosniff;
     add_header X-Frame-Options SAMEORIGIN;
     add_header Referrer-Policy "strict-origin-when-cross-origin";
+    include $SCANNER_BLOCK_SNIPPET;
 
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
@@ -539,6 +555,7 @@ server {
     add_header X-Content-Type-Options nosniff;
     add_header X-Frame-Options SAMEORIGIN;
     add_header Referrer-Policy "strict-origin-when-cross-origin";
+    include $SCANNER_BLOCK_SNIPPET;
 
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
@@ -944,6 +961,8 @@ ALREADY_DONE=$(jq 'length' "$CREDS_FILE" 2>/dev/null || echo 0)
 if [ "$ALREADY_DONE" -gt 0 ]; then
   echo "=== 이전 실행에서 $ALREADY_DONE 개 완료됨 — 이어서 설치 ==="
 fi
+
+ensure_scanner_block_snippet
 
 SUCCESSFUL_SITES=()
 FAILED_SITES=()

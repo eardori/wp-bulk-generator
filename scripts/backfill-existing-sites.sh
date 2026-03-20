@@ -37,6 +37,7 @@ WP_LIGHT_MODE="${WP_LIGHT_MODE:-1}"
 REMOTE_VALIDATE_TIMEOUT="${REMOTE_VALIDATE_TIMEOUT:-12}"
 TARGET_SLUGS_RAW=""
 INDEXNOW_KEY_FILE="${INDEXNOW_KEY_FILE:-/root/.wp-bulk-indexnow-key}"
+SCANNER_BLOCK_SNIPPET="${SCANNER_BLOCK_SNIPPET:-/etc/nginx/snippets/wp-bulk-scanner-blocks.conf}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,6 +78,20 @@ mkdir -p "$APP_CACHE_DIR"
 sync_cache() {
   cp "$CREDS_FILE" "$APP_CREDS_FILE" 2>/dev/null || true
   chown "$APP_FILE_OWNER" "$APP_CREDS_FILE" 2>/dev/null || true
+}
+
+ensure_scanner_block_snippet() {
+  mkdir -p "$(dirname "$SCANNER_BLOCK_SNIPPET")"
+  cat > "$SCANNER_BLOCK_SNIPPET" <<'NGINX'
+# Fast reject common scanner and fake app routes before they hit PHP.
+location = /index.html { return 404; }
+location = /sitemap.xml { return 404; }
+location ~* ^/(?:\.env|config(?:\.|/|$)|storage/|backup/|secrets(?:\.json|\.txt)?$|credentials(?:\.json|\.txt)?$|server-info$|swagger\.json$|manifest\.json$|info\.php$|debug/default/view$|webhooks/settings\.json$|aws/credentials$|api/payment/config$|api/shared/config/|manage/env$|stripe(?:\.json|\.conf|\.rb|\.env|/)|wp-content/uploads/wc-logs/|checkout$|cart$|billing$|signup$|register$|subscribe$|payment$|donate$|plans$|pricing$|order$|account$|shop$|dashboard$|admin$) {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+NGINX
 }
 
 wp_try() {
@@ -529,6 +544,7 @@ server {
     add_header X-Content-Type-Options nosniff;
     add_header X-Frame-Options SAMEORIGIN;
     add_header Referrer-Policy "strict-origin-when-cross-origin";
+    include $SCANNER_BLOCK_SNIPPET;
 
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
@@ -607,6 +623,7 @@ server {
     add_header X-Content-Type-Options nosniff;
     add_header X-Frame-Options SAMEORIGIN;
     add_header Referrer-Policy "strict-origin-when-cross-origin";
+    include $SCANNER_BLOCK_SNIPPET;
 
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
@@ -946,6 +963,7 @@ declare -a FAILED_SITES=()
 declare -a FAILED_REASONS=()
 
 echo "=== 기존 WordPress 사이트 런타임 보강 시작 ($SITE_COUNT개) ==="
+ensure_scanner_block_snippet
 
 for i in $(seq 0 $((SITE_COUNT - 1))); do
   SLUG=$(jq -r ".[$i].slug" "$CREDS_FILE")

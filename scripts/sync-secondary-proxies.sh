@@ -10,6 +10,7 @@ ALLMYREVIEW_CERT_MAX_NAMES="${ALLMYREVIEW_CERT_MAX_NAMES:-100}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 PROXY_PREFIX="secondary-proxy-"
 ACME_WEBROOT="${ACME_WEBROOT:-/var/www/certbot}"
+SCANNER_BLOCK_SNIPPET="${SCANNER_BLOCK_SNIPPET:-/etc/nginx/snippets/wp-bulk-scanner-blocks.conf}"
 
 if [ ! -f "$CREDS_FILE" ]; then
   echo "⚠ credentials file missing: $CREDS_FILE"
@@ -33,6 +34,20 @@ ensure_nginx_hash_settings() {
     s/^\h*server_names_hash_bucket_size\h+\d+;\n?//mg;
     s/(^\h*types_hash_max_size\h+\d+;\n)/$1    server_names_hash_max_size 4096;\n    server_names_hash_bucket_size 128;\n/m;
   ' "$nginx_conf"
+}
+
+ensure_scanner_block_snippet() {
+  mkdir -p "$(dirname "$SCANNER_BLOCK_SNIPPET")"
+  cat > "$SCANNER_BLOCK_SNIPPET" <<'NGINX'
+# Fast reject common scanner and fake app routes before they hit upstream WordPress.
+location = /index.html { return 404; }
+location = /sitemap.xml { return 404; }
+location ~* ^/(?:\.env|config(?:\.|/|$)|storage/|backup/|secrets(?:\.json|\.txt)?$|credentials(?:\.json|\.txt)?$|server-info$|swagger\.json$|manifest\.json$|info\.php$|debug/default/view$|webhooks/settings\.json$|aws/credentials$|api/payment/config$|api/shared/config/|manage/env$|stripe(?:\.json|\.conf|\.rb|\.env|/)|wp-content/uploads/wc-logs/|checkout$|cart$|billing$|signup$|register$|subscribe$|payment$|donate$|plans$|pricing$|order$|account$|shop$|dashboard$|admin$) {
+    access_log off;
+    log_not_found off;
+    return 444;
+}
+NGINX
 }
 
 cert_covers_domain() {
@@ -186,6 +201,7 @@ server {
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     client_max_body_size 128m;
+    include $SCANNER_BLOCK_SNIPPET;
 
     location / {
         proxy_pass https://$upstream_target;
@@ -213,6 +229,7 @@ server {
     server_name $domain;
 
     client_max_body_size 128m;
+    include $SCANNER_BLOCK_SNIPPET;
 
     location ^~ /.well-known/acme-challenge/ {
         root $ACME_WEBROOT;
@@ -292,6 +309,7 @@ shopt -u nullglob
 
 if [ "${#entries[@]}" -eq 0 ]; then
   ensure_nginx_hash_settings
+  ensure_scanner_block_snippet
   nginx -t && systemctl reload nginx
   ensure_allmyreview_certificate
   echo "✓ secondary proxy 대상 사이트 없음"
@@ -299,6 +317,7 @@ if [ "${#entries[@]}" -eq 0 ]; then
 fi
 
 mkdir -p "$ACME_WEBROOT/.well-known/acme-challenge"
+ensure_scanner_block_snippet
 
 echo "--- secondary proxy HTTP 구성 (${#entries[@]}개) ---"
 for entry in "${entries[@]}"; do
