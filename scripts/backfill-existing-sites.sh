@@ -759,11 +759,48 @@ ensure_seo_mu_plugin() {
  * AI SEO optimization MU-plugin.
  */
 
-add_action('wp_head', function() {
-    if (is_singular()) {
-        echo '<link rel="canonical" href="' . esc_url(get_permalink()) . '" />' . "\n";
+add_action('wp', function() {
+    if (class_exists('WPSEO_Frontend')) {
+        remove_action('wp_head', 'rel_canonical');
     }
 }, 1);
+
+add_action('wp_head', function() {
+    if (class_exists('WPSEO_Frontend')) {
+        remove_action('wp_head', 'rel_canonical');
+    }
+}, 0);
+
+function ai_dedupe_canonical_tags($html) {
+    if (!is_string($html) || stripos($html, 'rel="canonical"') === false) {
+        return $html;
+    }
+
+    if (!preg_match_all('/<link[^>]+rel=["\\\']canonical["\\\'][^>]*>\\s*/i', $html, $matches) || count($matches[0]) <= 1) {
+        return $html;
+    }
+
+    $last = end($matches[0]);
+    $clean = preg_replace('/<link[^>]+rel=["\\\']canonical["\\\'][^>]*>\\s*/i', '', $html);
+
+    if ($clean === null || !is_string($last)) {
+        return $html;
+    }
+
+    return preg_replace('/<\\/head>/i', $last . "\n</head>", $clean, 1) ?? $html;
+}
+
+add_filter('wpfc_buffer_callback_filter', function($buffer) {
+    return ai_dedupe_canonical_tags($buffer);
+}, 10, 1);
+
+add_action('template_redirect', function() {
+    if (is_admin() || wp_doing_ajax() || is_feed()) {
+        return;
+    }
+
+    ob_start('ai_dedupe_canonical_tags');
+}, 0);
 
 add_action('wp_head', function() {
     if (is_search() || (is_archive() && !have_posts())) {
