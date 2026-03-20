@@ -373,6 +373,12 @@ write_robots_txt() {
 User-agent: *
 Allow: /
 
+User-agent: Bingbot
+Allow: /
+
+User-agent: msnbot
+Allow: /
+
 User-agent: GPTBot
 Allow: /
 
