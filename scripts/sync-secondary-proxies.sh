@@ -4,7 +4,7 @@
 set -euo pipefail
 
 CREDS_FILE="${CREDS_FILE:-/home/ubuntu/wp-bulk-generator/bridge-api/data/wp-sites-credentials.json}"
-ALLMYREVIEW_CERT_NAME="${ALLMYREVIEW_CERT_NAME:-allmyreview-sites}"
+ALLMYREVIEW_CERT_NAME="${ALLMYREVIEW_CERT_NAME:-allmyreview-secondary-sites}"
 ALLMYREVIEW_CERT_DIR="/etc/letsencrypt/live/$ALLMYREVIEW_CERT_NAME"
 ALLMYREVIEW_CERT_MAX_NAMES="${ALLMYREVIEW_CERT_MAX_NAMES:-100}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
@@ -261,6 +261,7 @@ while IFS= read -r domain; do
 done < <(
   jq -r '
     .[]?
+    | select((.server_id // "") != "" and (.server_id != "primary"))
     | .domain // empty
     | ascii_downcase
     | select(endswith(".allmyreview.site"))

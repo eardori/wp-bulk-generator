@@ -10,9 +10,25 @@ APP_FILE_OWNER="${APP_FILE_OWNER:-$(stat -c '%U:%G' "$REPO_ROOT" 2>/dev/null || 
 CREDS_FILE="/root/wp-sites-credentials.json"
 APP_CACHE_DIR="${APP_CACHE_DIR:-$REPO_ROOT/admin/.cache}"
 APP_CREDS_FILE="$APP_CACHE_DIR/sites-credentials.json"
-ALLMYREVIEW_CERT_NAME="allmyreview-sites"
+SERVER_ROLE_FILE="${SERVER_ROLE_FILE:-/etc/wp-bulk-server-role}"
+SERVER_ROLE="${WP_BULK_SERVER_ROLE:-}"
+if [ -z "$SERVER_ROLE" ] && [ -f "$SERVER_ROLE_FILE" ]; then
+  SERVER_ROLE="$(tr -d '\r\n' < "$SERVER_ROLE_FILE")"
+fi
+case "$SERVER_ROLE" in
+  primary)
+    DEFAULT_ALLMYREVIEW_CERT_NAME="allmyreview-primary-sites"
+    ;;
+  secondary)
+    DEFAULT_ALLMYREVIEW_CERT_NAME="allmyreview-secondary-sites"
+    ;;
+  *)
+    DEFAULT_ALLMYREVIEW_CERT_NAME="allmyreview-sites"
+    ;;
+esac
+ALLMYREVIEW_CERT_NAME="${ALLMYREVIEW_CERT_NAME:-$DEFAULT_ALLMYREVIEW_CERT_NAME}"
 ALLMYREVIEW_CERT_DIR="/etc/letsencrypt/live/$ALLMYREVIEW_CERT_NAME"
-ALLMYREVIEW_CERT_MAX_NAMES=95
+ALLMYREVIEW_CERT_MAX_NAMES="${ALLMYREVIEW_CERT_MAX_NAMES:-100}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 WP_CRON_RUNNER_PATH="/usr/local/bin/wp-bulk-run-cron.sh"
 WP_CRON_SCHEDULE_PATH="/etc/cron.d/wp-bulk-run-cron"
@@ -214,7 +230,37 @@ cert_covers_domain() {
 }
 
 collect_allmyreview_domains() {
-  jq -r '.[]? | .domain // empty' "$CREDS_FILE" 2>/dev/null | grep '\.allmyreview\.site$' | sort -u
+  python3 - <<'PY'
+from pathlib import Path
+import subprocess
+
+domains = set()
+root = Path("/var/www")
+if root.exists():
+    for site_dir in root.iterdir():
+        if not site_dir.is_dir() or not (site_dir / "wp-config.php").exists():
+            continue
+        try:
+            home = subprocess.check_output(
+                ["wp", "option", "get", "home", f"--path={site_dir}", "--allow-root"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=8,
+            ).strip().lower()
+        except Exception:
+            continue
+
+        if home.startswith("https://"):
+            home = home[len("https://"):]
+        elif home.startswith("http://"):
+            home = home[len("http://"):]
+        domain = home.split("/", 1)[0]
+        if domain.endswith(".allmyreview.site"):
+            domains.add(domain)
+
+for domain in sorted(domains):
+    print(domain)
+PY
 }
 
 ensure_allmyreview_certificate() {

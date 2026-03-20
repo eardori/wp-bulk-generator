@@ -24,14 +24,31 @@ APP_FILE_OWNER="${APP_FILE_OWNER:-$(stat -c '%U:%G' "$REPO_ROOT" 2>/dev/null || 
 
 source /root/.wp-bulk-credentials  # DB_ROOT_PASS
 
+SERVER_ROLE_FILE="${SERVER_ROLE_FILE:-/etc/wp-bulk-server-role}"
+SERVER_ROLE="${WP_BULK_SERVER_ROLE:-}"
+if [ -z "$SERVER_ROLE" ] && [ -f "$SERVER_ROLE_FILE" ]; then
+  SERVER_ROLE="$(tr -d '\r\n' < "$SERVER_ROLE_FILE")"
+fi
+case "$SERVER_ROLE" in
+  primary)
+    DEFAULT_ALLMYREVIEW_CERT_NAME="allmyreview-primary-sites"
+    ;;
+  secondary)
+    DEFAULT_ALLMYREVIEW_CERT_NAME="allmyreview-secondary-sites"
+    ;;
+  *)
+    DEFAULT_ALLMYREVIEW_CERT_NAME="allmyreview-sites"
+    ;;
+esac
+
 WP_ADMIN_USER="admin"
 WP_ADMIN_PASS="$(openssl rand -base64 16)"
 WP_ADMIN_EMAIL="admin@wpbulk.local"
 WEB_ROOT="/var/www"
 CREDS_FILE="/root/wp-sites-credentials.json"
-ALLMYREVIEW_CERT_NAME="allmyreview-sites"
+ALLMYREVIEW_CERT_NAME="${ALLMYREVIEW_CERT_NAME:-$DEFAULT_ALLMYREVIEW_CERT_NAME}"
 ALLMYREVIEW_CERT_DIR="/etc/letsencrypt/live/$ALLMYREVIEW_CERT_NAME"
-ALLMYREVIEW_CERT_MAX_NAMES=95
+ALLMYREVIEW_CERT_MAX_NAMES="${ALLMYREVIEW_CERT_MAX_NAMES:-100}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 WP_CRON_RUNNER_PATH="${WP_CRON_RUNNER_PATH:-/usr/local/bin/wp-bulk-run-cron.sh}"
 WP_CRON_SCHEDULE_PATH="${WP_CRON_SCHEDULE_PATH:-/etc/cron.d/wp-bulk-run-cron}"
@@ -134,10 +151,52 @@ cert_covers_domain() {
 }
 
 collect_allmyreview_domains() {
-  {
-    jq -r '.[]? | .domain // empty' "$CREDS_FILE" 2>/dev/null || true
-    jq -r '.[]? | .domain // empty' "$CONFIG_FILE" 2>/dev/null || true
-  } | grep '\.allmyreview\.site$' | sort -u
+  python3 - "$CONFIG_FILE" <<'PY'
+from pathlib import Path
+import json
+import subprocess
+import sys
+
+domains = set()
+root = Path("/var/www")
+if root.exists():
+    for site_dir in root.iterdir():
+        if not site_dir.is_dir() or not (site_dir / "wp-config.php").exists():
+            continue
+        try:
+            home = subprocess.check_output(
+                ["wp", "option", "get", "home", f"--path={site_dir}", "--allow-root"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=8,
+            ).strip().lower()
+        except Exception:
+            continue
+        if home.startswith("https://"):
+            home = home[len("https://"):]
+        elif home.startswith("http://"):
+            home = home[len("http://"):]
+        domain = home.split("/", 1)[0]
+        if domain.endswith(".allmyreview.site"):
+            domains.add(domain)
+
+config_path = Path(sys.argv[1])
+if config_path.exists():
+    try:
+      payload = json.loads(config_path.read_text())
+    except Exception:
+      payload = []
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            domain = str(item.get("domain") or "").strip().lower()
+            if domain.endswith(".allmyreview.site"):
+                domains.add(domain)
+
+for domain in sorted(domains):
+    print(domain)
+PY
 }
 
 ensure_allmyreview_certificate() {
@@ -363,8 +422,8 @@ write_nginx_config() {
   local nginx_path="/etc/nginx/sites-available/$slug"
 
   if [[ "$domain" == *.allmyreview.site ]] \
-    && [[ -f /etc/letsencrypt/live/allmyreview-sites/fullchain.pem ]] \
-    && [[ -f /etc/letsencrypt/live/allmyreview-sites/privkey.pem ]]; then
+    && [[ -f "$ALLMYREVIEW_CERT_DIR/fullchain.pem" ]] \
+    && [[ -f "$ALLMYREVIEW_CERT_DIR/privkey.pem" ]]; then
     cat > "$nginx_path" << NGINX
 server {
     listen 80;
@@ -379,8 +438,8 @@ server {
     root $site_dir;
     index index.php index.html;
 
-    ssl_certificate /etc/letsencrypt/live/allmyreview-sites/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/allmyreview-sites/privkey.pem;
+    ssl_certificate $ALLMYREVIEW_CERT_DIR/fullchain.pem;
+    ssl_certificate_key $ALLMYREVIEW_CERT_DIR/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 

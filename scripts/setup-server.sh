@@ -14,6 +14,12 @@ if [ -f /etc/os-release ]; then
   OS_ID="${ID:-}"
 fi
 
+WP_BULK_SERVER_ROLE="${WP_BULK_SERVER_ROLE:-}"
+if [ -n "$WP_BULK_SERVER_ROLE" ]; then
+  printf '%s\n' "$WP_BULK_SERVER_ROLE" > /etc/wp-bulk-server-role
+  chmod 644 /etc/wp-bulk-server-role
+fi
+
 # ---- 0. Swap 추가 (RAM 부족 대비) ----
 if [ ! -f /swapfile ]; then
   echo "--- Swap 2GB 생성 ---"
