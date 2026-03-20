@@ -91,9 +91,10 @@ const DEFAULT_PERSONA: SitePersona = {
   tone: "신뢰감 있는",
   bio: "실구매 리뷰와 공개 정보를 바탕으로 핵심만 정리해 전달합니다.",
 };
-const GEMINI_CONTENT_MODEL = process.env.GEMINI_CONTENT_MODEL || "gemini-3.1-flash-lite";
+const GEMINI_CONTENT_MODEL =
+  process.env.GEMINI_CONTENT_MODEL || "gemini-2.5-flash-lite";
 const GEMINI_CONTENT_FALLBACK_MODEL =
-  process.env.GEMINI_CONTENT_FALLBACK_MODEL || "gemini-2.5-flash-lite";
+  process.env.GEMINI_CONTENT_FALLBACK_MODEL || "gemini-2.5-flash";
 
 const REVIEW_TERM_STOPWORDS = new Set([
   "정말", "진짜", "그냥", "약간", "조금", "너무", "엄청", "가장", "많이", "매우",

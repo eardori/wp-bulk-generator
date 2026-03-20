@@ -7,6 +7,7 @@ import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
 
 const BATCH_SIZE = 10;
 const MAX_SLUG_LENGTH = 15;
+const GEMINI_CONFIG_MODEL = process.env.GEMINI_CONFIG_MODEL || "gemini-2.5-flash";
 const LOCAL_RESERVED_PATHS = [
   process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json",
   process.env.CONFIG_PATH || "/root/wp-sites-config.json",
@@ -264,7 +265,7 @@ export async function generateConfigsRoutes(app: FastifyInstance) {
 
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({
-        model: "gemini-2.0-flash",
+        model: GEMINI_CONFIG_MODEL,
         generationConfig: {
           temperature: 0.9,
           maxOutputTokens: 8192,
