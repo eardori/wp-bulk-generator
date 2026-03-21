@@ -26,6 +26,9 @@
 | Fly.io 마이그레이션 | 🔧 진행 중 | Kevin | Bridge API → Fly.io 분리 (코드 완료, 배포 대기) |
 | EC2 Agent | 🔧 진행 중 | Kevin | 경량 Fastify (:4001) — credentials/deploy/health/groups (코드 완료, 배포 대기) |
 | Oracle Cloud 이전 | ⏸️ 보류 | - | Fly.io 분리 완료로 우선순위 하락 |
+| GTM4WP 설치 스크립트 | ✅ 완료 | Kevin | setup-gtm-analytics.sh |
+| GA4 일일 보고 스크립트 | ✅ 완료 | Kevin | ga4-daily-report.py |
+| 캐시 웜업 스크립트 | ✅ 완료 | Kevin | warmup-cache.sh (2026-03-17) |
 | 테스트 | ❌ 미구현 | - | 추후 테스트 프레임워크 도입 예정 |
 
 ## 상태 범례
@@ -45,3 +48,4 @@
 | 2026-03-12 | Kevin | Claude Code | Bridge API 완료, Vercel 마이그레이션 거의 완료 상태 업데이트 |
 | 2026-03-12 | Kevin | Claude Code | Vercel 마이그레이션 완료 (E2E 테스트 통과) |
 | 2026-03-12 | Kevin | Claude Code | Fly.io 마이그레이션 + EC2 Agent 항목 추가 |
+| 2026-03-17 | Kevin | Claude Code | GTM4WP, GA4 보고, 캐시 웜업 스크립트 항목 추가 |
