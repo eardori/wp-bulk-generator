@@ -32,6 +32,24 @@ primary_site_exists() {
   [ -f "/etc/nginx/sites-available/$slug" ] || [ -L "/etc/nginx/sites-enabled/$slug" ]
 }
 
+disable_conflicting_primary_site() {
+  local slug="$1"
+  local disabled_dir="/etc/nginx/sites-available/wp-bulk-disabled-primary"
+  local source_path="/etc/nginx/sites-available/$slug"
+  local target_path="$disabled_dir/$slug"
+
+  mkdir -p "$disabled_dir"
+
+  if [ -L "/etc/nginx/sites-enabled/$slug" ]; then
+    rm -f "/etc/nginx/sites-enabled/$slug"
+  fi
+
+  if [ -f "$source_path" ]; then
+    mv "$source_path" "$target_path"
+    echo "  ↷ disabled conflicting primary site config for $slug"
+  fi
+}
+
 ensure_nginx_hash_settings() {
   local nginx_conf="/etc/nginx/nginx.conf"
 
@@ -277,8 +295,7 @@ while IFS=$'\t' read -r slug domain upstream_host ssh_user key_path; do
   [ -n "$upstream_host" ] || continue
 
   if primary_site_exists "$slug"; then
-    echo "  - skip secondary proxy for $domain (local primary site exists)"
-    continue
+    disable_conflicting_primary_site "$slug"
   fi
 
   entries+=("${slug}"$'\t'"${domain}"$'\t'"${upstream_host}"$'\t'"${ssh_user}"$'\t'"${key_path}")
