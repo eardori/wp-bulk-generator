@@ -91,7 +91,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/ssh -NT -L 127.0.0.1:${port}:127.0.0.1:443 -i ${key_path} -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes ${ssh_user}@${host}
+ExecStart=/usr/bin/ssh -NT -L 127.0.0.1:${port}:127.0.0.1:80 -i ${key_path} -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes ${ssh_user}@${host}
 Restart=always
 RestartSec=5
 User=root
@@ -102,6 +102,7 @@ UNIT
 
   systemctl daemon-reload
   systemctl enable --now "$service_name" >/dev/null
+  systemctl restart "$service_name" >/dev/null
 }
 
 resolve_upstream_target() {
@@ -216,11 +217,8 @@ server {
     include $SCANNER_BLOCK_SNIPPET;
 
     location / {
-        proxy_pass https://$upstream_target;
+        proxy_pass http://$upstream_target;
         proxy_http_version 1.1;
-        proxy_ssl_server_name on;
-        proxy_ssl_name \$host;
-        proxy_ssl_verify off;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -250,11 +248,8 @@ server {
     }
 
     location / {
-        proxy_pass https://$upstream_target;
+        proxy_pass http://$upstream_target;
         proxy_http_version 1.1;
-        proxy_ssl_server_name on;
-        proxy_ssl_name \$host;
-        proxy_ssl_verify off;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
