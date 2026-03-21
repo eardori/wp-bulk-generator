@@ -39,6 +39,10 @@ TARGET_SLUGS_RAW=""
 INDEXNOW_KEY_FILE="${INDEXNOW_KEY_FILE:-/root/.wp-bulk-indexnow-key}"
 SCANNER_BLOCK_SNIPPET="${SCANNER_BLOCK_SNIPPET:-/etc/nginx/snippets/wp-bulk-scanner-blocks.conf}"
 
+if [ -z "${BING_SITE_VERIFICATION:-}" ]; then
+  echo "⚠ BING_SITE_VERIFICATION is not set; Bing ownership meta tag will not be injected during backfill."
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --slugs)

@@ -57,6 +57,10 @@ POST_DEPLOY_REPAIR_SCRIPT="${POST_DEPLOY_REPAIR_SCRIPT:-$SCRIPT_DIR/backfill-exi
 INDEXNOW_KEY_FILE="${INDEXNOW_KEY_FILE:-/root/.wp-bulk-indexnow-key}"
 SCANNER_BLOCK_SNIPPET="${SCANNER_BLOCK_SNIPPET:-/etc/nginx/snippets/wp-bulk-scanner-blocks.conf}"
 
+if [ -z "${BING_SITE_VERIFICATION:-}" ]; then
+  echo "⚠ BING_SITE_VERIFICATION is not set; Bing ownership meta tag will not be injected into deployed WP sites."
+fi
+
 # 앱/브리지 캐시 경로
 APP_CACHE_DIR="${APP_CACHE_DIR:-$REPO_ROOT/admin/.cache}"
 APP_CREDS_FILE="$APP_CACHE_DIR/sites-credentials.json"
