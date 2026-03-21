@@ -351,6 +351,9 @@ async function syncDeployedSitesWithBing(
           const result = await syncBingSite(url);
           if (result.added) addedCount += 1;
           if (result.feedSubmitted) feedCount += 1;
+          for (const note of result.notes) {
+            onLog(`Bing sync note: ${result.siteUrl} - ${note}`);
+          }
 
           if (result.errors.length > 0) {
             errorCount += 1;
