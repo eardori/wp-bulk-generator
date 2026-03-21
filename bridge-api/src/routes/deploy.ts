@@ -7,6 +7,10 @@ import { setupSSE } from "../utils/sse.js";
 import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
 import { seedDashboardSiteCaches } from "../lib/dashboard-cache.js";
 import {
+  isBingWebmasterSyncEnabled,
+  syncBingSite,
+} from "../lib/bing-webmaster.js";
+import {
   getDefaultDeployTarget,
   getPrimaryServerTarget,
   isRemoteTarget,
@@ -31,6 +35,10 @@ const DEPLOY_CACHE_WARM_TIMEOUT_MS =
   Number(process.env.DEPLOY_CACHE_WARM_TIMEOUT_MS || 12000);
 const DEPLOY_CACHE_WARM_CONCURRENCY =
   Math.max(1, Number(process.env.DEPLOY_CACHE_WARM_CONCURRENCY || 4));
+const DEPLOY_BING_SYNC_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.DEPLOY_BING_SYNC_CONCURRENCY || 3)
+);
 
 type DeployConfig = {
   site_slug?: string;
@@ -305,6 +313,72 @@ async function warmDeployedSites(
   );
 
   await Promise.allSettled(workers);
+}
+
+async function syncDeployedSitesWithBing(
+  sites: Array<{ url: string }>,
+  onLog: (message: string) => void
+): Promise<void> {
+  if (!isBingWebmasterSyncEnabled()) {
+    return;
+  }
+
+  const urls = Array.from(
+    new Set(
+      sites
+        .map((site) => String(site.url || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (urls.length === 0) {
+    return;
+  }
+
+  let cursor = 0;
+  let addedCount = 0;
+  let feedCount = 0;
+  let errorCount = 0;
+
+  const workers = Array.from(
+    { length: Math.min(DEPLOY_BING_SYNC_CONCURRENCY, urls.length) },
+    async () => {
+      while (cursor < urls.length) {
+        const index = cursor++;
+        const url = urls[index];
+
+        try {
+          const result = await syncBingSite(url);
+          if (result.added) addedCount += 1;
+          if (result.feedSubmitted) feedCount += 1;
+
+          if (result.errors.length > 0) {
+            errorCount += 1;
+            onLog(
+              `Bing sync partial: ${result.siteUrl} (add=${result.added ? "ok" : "fail"}, sitemap=${result.feedSubmitted ? "ok" : "fail"})`
+            );
+            for (const error of result.errors) {
+              onLog(`Bing sync error: ${error}`);
+            }
+          } else {
+            onLog(`Bing sync ok: ${result.siteUrl}`);
+          }
+        } catch (error) {
+          errorCount += 1;
+          onLog(
+            `Bing sync failed: ${url} - ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
+    }
+  );
+
+  await Promise.allSettled(workers);
+  onLog(
+    `Bing sync summary: ${urls.length}개 사이트, add ${addedCount}건, sitemap ${feedCount}건, 오류 ${errorCount}건`
+  );
 }
 
 function syncLocalCaches(credentials: StoredCredential[], configs: DeployConfig[]) {
@@ -803,6 +877,9 @@ export async function deployRoutes(app: FastifyInstance) {
 
         if (successfulSites.length > 0) {
           void warmDeployedSites(successfulSites);
+          void syncDeployedSitesWithBing(successfulSites, (message) => {
+            send({ type: "log", message });
+          });
         }
 
         send({ type: "credentials", credentials: credentialsSummary });
