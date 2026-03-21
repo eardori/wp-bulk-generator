@@ -98,6 +98,10 @@ wp_try() {
   timeout "$WP_CLI_TIMEOUT" wp "$@"
 }
 
+normalize_domain() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
 slug_selected() {
   local slug="$1"
   if [ "${#TARGET_SLUGS[@]}" -eq 0 ]; then
@@ -108,7 +112,8 @@ slug_selected() {
 }
 
 site_url_for_domain() {
-  local domain="$1"
+  local domain
+  domain="$(normalize_domain "$1")"
   if [[ "$domain" == *.allmyreview.site ]]; then
     printf 'https://%s' "$domain"
   else
@@ -1011,6 +1016,7 @@ ensure_scanner_block_snippet
 for i in $(seq 0 $((SITE_COUNT - 1))); do
   SLUG=$(jq -r ".[$i].slug" "$CREDS_FILE")
   DOMAIN=$(jq -r ".[$i].domain // empty" "$CREDS_FILE")
+  DOMAIN="$(normalize_domain "$DOMAIN")"
   SITE_DIR=$(jq -r ".[$i].site_dir // empty" "$CREDS_FILE")
   SITE_URL="$(site_url_for_domain "$DOMAIN")"
 

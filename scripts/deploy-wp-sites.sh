@@ -94,6 +94,10 @@ wp_try() {
   timeout "$WP_CLI_TIMEOUT" wp "$@"
 }
 
+normalize_domain() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
 validate_local_wordpress_runtime() {
   local site_dir="$1"
   local expected_url="$2"
@@ -281,7 +285,8 @@ ensure_allmyreview_certificate() {
 }
 
 site_url_for_domain() {
-  local domain="$1"
+  local domain
+  domain="$(normalize_domain "$1")"
   if [[ "$domain" == *.allmyreview.site ]]; then
     printf 'https://%s' "$domain"
   else
@@ -1248,6 +1253,7 @@ for i in $(seq 0 $(($SITE_COUNT - 1))); do
   TITLE=$(jq -r ".[$i].site_title" "$CONFIG_FILE")
   TAGLINE=$(jq -r ".[$i].tagline" "$CONFIG_FILE")
   DOMAIN=$(jq -r ".[$i].domain // empty" "$CONFIG_FILE")
+  DOMAIN="$(normalize_domain "$DOMAIN")"
   PRIMARY=$(jq -r ".[$i].color_scheme.primary" "$CONFIG_FILE")
   SECONDARY=$(jq -r ".[$i].color_scheme.secondary" "$CONFIG_FILE")
   ACCENT=$(jq -r ".[$i].color_scheme.accent" "$CONFIG_FILE")

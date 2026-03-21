@@ -22,6 +22,10 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+normalize_domain() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
 ensure_nginx_hash_settings() {
   local nginx_conf="/etc/nginx/nginx.conf"
 
@@ -51,7 +55,8 @@ NGINX
 }
 
 cert_covers_domain() {
-  local domain="$1"
+  local domain
+  domain="$(normalize_domain "$1")"
 
   [[ -f "$ALLMYREVIEW_CERT_DIR/fullchain.pem" ]] || return 1
   openssl x509 -in "$ALLMYREVIEW_CERT_DIR/fullchain.pem" -noout -text 2>/dev/null | grep -Fq "DNS:$domain"
@@ -171,7 +176,8 @@ ensure_allmyreview_certificate() {
 
 write_proxy_config() {
   local slug="$1"
-  local domain="$2"
+  local domain
+  domain="$(normalize_domain "$2")"
   local upstream_target="$3"
   local mode="$4"
   local nginx_path="/etc/nginx/sites-available/${PROXY_PREFIX}${slug}"
@@ -207,7 +213,7 @@ server {
         proxy_pass https://$upstream_target;
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
-        proxy_ssl_name $host;
+        proxy_ssl_name \$host;
         proxy_ssl_verify off;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -274,7 +280,7 @@ done < <(
     .[]?
     | select((.server_id // "") != "" and (.server_id != "primary"))
     | select(.slug and .domain and .server_host)
-    | [.slug, .domain, .server_host, (.server_user // ""), (.server_key_path // "")] | @tsv
+    | [.slug, (.domain | ascii_downcase), .server_host, (.server_user // ""), (.server_key_path // "")] | @tsv
   ' "$CREDS_FILE"
 )
 
