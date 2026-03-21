@@ -26,6 +26,12 @@ normalize_domain() {
   printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
 }
 
+primary_site_exists() {
+  local slug="$1"
+  [ -n "$slug" ] || return 1
+  [ -f "/etc/nginx/sites-available/$slug" ] || [ -L "/etc/nginx/sites-enabled/$slug" ]
+}
+
 ensure_nginx_hash_settings() {
   local nginx_conf="/etc/nginx/nginx.conf"
 
@@ -274,6 +280,12 @@ while IFS=$'\t' read -r slug domain upstream_host ssh_user key_path; do
   [ -n "$slug" ] || continue
   [ -n "$domain" ] || continue
   [ -n "$upstream_host" ] || continue
+
+  if primary_site_exists "$slug"; then
+    echo "  - skip secondary proxy for $domain (local primary site exists)"
+    continue
+  fi
+
   entries+=("${slug}"$'\t'"${domain}"$'\t'"${upstream_host}"$'\t'"${ssh_user}"$'\t'"${key_path}")
 done < <(
   jq -r '
@@ -284,18 +296,16 @@ done < <(
   ' "$CREDS_FILE"
 )
 
-while IFS= read -r domain; do
-  [ -n "$domain" ] || continue
-  cert_domains+=("$domain")
-done < <(
-  jq -r '
-    .[]?
-    | select((.server_id // "") != "" and (.server_id != "primary"))
-    | .domain // empty
-    | ascii_downcase
-    | select(endswith(".allmyreview.site"))
-  ' "$CREDS_FILE" | sort -u
-)
+for entry in "${entries[@]}"; do
+  IFS=$'\t' read -r _slug domain _upstream_host _ssh_user _key_path <<< "$entry"
+  if [ -n "$domain" ] && [[ "$domain" == *.allmyreview.site ]]; then
+    cert_domains+=("$domain")
+  fi
+done
+
+if [ "${#cert_domains[@]}" -gt 0 ]; then
+  mapfile -t cert_domains < <(printf '%s\n' "${cert_domains[@]}" | sort -u)
+fi
 
 declare -A active=()
 for entry in "${entries[@]}"; do
