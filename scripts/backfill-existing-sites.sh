@@ -884,9 +884,23 @@ function ai_dedupe_canonical_tags($html) {
     return preg_replace('/<\\/head>/i', $last . "\n</head>", $clean, 1) ?? $html;
 }
 
+function ai_normalize_post_content_structure($content) {
+    if (!is_string($content) || $content === '') {
+        return $content;
+    }
+
+    $content = preg_replace('/\s*<link[^>]+rel=["\\\']canonical["\\\'][^>]*>\s*/i', "\n", $content);
+    $content = preg_replace('/<h1(\\b[^>]*)>/i', '<h2$1>', $content);
+    $content = preg_replace('/<\\/h1>/i', '</h2>', $content);
+
+    return $content;
+}
+
 add_filter('wpfc_buffer_callback_filter', function($buffer) {
     return ai_dedupe_canonical_tags($buffer);
 }, 10, 1);
+
+add_filter('the_content', 'ai_normalize_post_content_structure', 1);
 
 add_action('template_redirect', 'ai_maybe_redirect_numbered_duplicate_slug', -1000);
 

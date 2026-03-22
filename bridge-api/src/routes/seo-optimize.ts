@@ -71,6 +71,31 @@ function normalizeHtmlSignature(html: string): string {
   return html.replace(/\s+/g, " ").trim();
 }
 
+function normalizeHealthFoodStructureInHtml(html: string): string {
+  const $ = cheerio.load(html || "", null, false);
+
+  $('link[rel="canonical"]').remove();
+
+  $("h1").each((_, el) => {
+    const replacement = $("<h2></h2>");
+    replacement.html($(el).html() || "");
+    const attrs = $(el).attr() || {};
+    for (const [key, value] of Object.entries(attrs)) {
+      if (typeof value === "string") {
+        replacement.attr(key, value);
+      }
+    }
+    $(el).replaceWith(replacement);
+  });
+
+  $('script[type="application/ld+json"]').each((_, script) => {
+    const text = $(script).html()?.trim() || "";
+    if (!text) $(script).remove();
+  });
+
+  return $.root().html()?.trim() || "";
+}
+
 function buildSchemaBlocks(
   post: WPPost,
   site: SiteCredential,
@@ -402,7 +427,7 @@ export async function seoOptimizeRoutes(app: FastifyInstance) {
             // 기존 related-posts div 제거 후 재생성
             const $ = cheerio.load(contentWithoutSchemas, null, false);
             $(".related-posts").remove();
-            const cleanedContent = $.html() || contentWithoutSchemas;
+            const cleanedContent = normalizeHealthFoodStructureInHtml($.html() || contentWithoutSchemas);
 
             // 관련 글 내부 링크 생성
             const relatedPosts = allSitePosts

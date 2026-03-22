@@ -297,6 +297,34 @@ function cleanup_existing_post_language($html, $title = '') {
   return cleanup_empty_html_blocks($html);
 }
 
+function normalize_health_food_format($html) {
+  $html = (string) $html;
+
+  $html = preg_replace(
+    '/\s*<link[^>]+rel=["\']canonical["\'][^>]*>\s*/iu',
+    "\n",
+    $html
+  );
+
+  $html = preg_replace_callback(
+    '/<h1(\b[^>]*)>(.*?)<\/h1>/isu',
+    function ($matches) {
+      $attrs = $matches[1] ?? '';
+      $inner = $matches[2] ?? '';
+      return '<h2' . $attrs . '>' . $inner . '</h2>';
+    },
+    $html
+  );
+
+  $html = preg_replace(
+    '/<script[^>]*type=["\']application\/ld\+json["\'][^>]*>\s*<\/script>/iu',
+    '',
+    $html
+  );
+
+  return cleanup_empty_html_blocks($html);
+}
+
 function improve_image_alts($html, $title) {
   $counter = 0;
 
@@ -602,9 +630,11 @@ foreach ($posts as $post) {
   $short = mb_substr($title, 0, 35);
   $original_content = (string) $post->post_content;
   $content_without_schemas = strip_json_ld_scripts($original_content);
-  $content = cleanup_existing_post_language(
-    improve_image_alts(strip_review_reference_markers($content_without_schemas), $title),
-    $title
+  $content = normalize_health_food_format(
+    cleanup_existing_post_language(
+      improve_image_alts(strip_review_reference_markers($content_without_schemas), $title),
+      $title
+    )
   );
 
   $excerpt = wp_strip_all_tags($post->post_excerpt ?: wp_trim_words($content, 30, ''));

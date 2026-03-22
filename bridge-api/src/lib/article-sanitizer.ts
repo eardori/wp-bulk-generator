@@ -110,13 +110,43 @@ function isReviewKeywordTag(tag: string): boolean {
   return REVIEW_KEYWORD_TAG_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+function normalizeHealthFoodStructureInHtml(html: string): string {
+  const $ = cheerio.load(html || "", null, false);
+
+  $('link[rel="canonical"]').remove();
+
+  $("h1").each((_, el) => {
+    const $el = $(el);
+    const attrs = { ...($el.attr() || {}) };
+    const replacement = $("<h2></h2>");
+    replacement.html($el.html() || "");
+    for (const [key, value] of Object.entries(attrs)) {
+      if (typeof value === "string") {
+        replacement.attr(key, value);
+      }
+    }
+    $el.replaceWith(replacement);
+  });
+
+  $("script[type='application/ld+json']").each((_, el) => {
+    const text = ($(el).html() || "").trim();
+    if (!text) {
+      $(el).remove();
+    }
+  });
+
+  return $.html().trim();
+}
+
 export function sanitizeGeneratedArticle<T extends GeneratedArticleLike>(article: T): T {
   return {
     ...article,
     title: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.title)),
     metaTitle: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.metaTitle)),
     metaDescription: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.metaDescription)),
-    htmlContent: sanitizeInternalReviewRefsInHtml(article.htmlContent),
+    htmlContent: normalizeHealthFoodStructureInHtml(
+      sanitizeInternalReviewRefsInHtml(article.htmlContent)
+    ),
     excerpt: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.excerpt)),
     tags: Array.isArray(article.tags)
       ? article.tags
