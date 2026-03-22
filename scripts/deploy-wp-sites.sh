@@ -80,6 +80,12 @@ sync_cache() {
   chown "$APP_FILE_OWNER" "$BRIDGE_CREDS_FILE" 2>/dev/null || true
 }
 
+purge_fastcgi_cache() {
+  if [ -d /tmp/nginx-cache ]; then
+    find /tmp/nginx-cache -mindepth 1 -delete 2>/dev/null || true
+  fi
+}
+
 ensure_scanner_block_snippet() {
   mkdir -p "$(dirname "$SCANNER_BLOCK_SNIPPET")"
   cat > "$SCANNER_BLOCK_SNIPPET" <<'NGINX'
@@ -1403,6 +1409,9 @@ done
 echo ""
 echo "--- Nginx 설정 검증 ---"
 nginx -t && systemctl reload nginx
+if [ "${#SUCCESSFUL_SITES[@]}" -gt 0 ]; then
+  purge_fastcgi_cache
+fi
 ensure_allmyreview_certificate
 ensure_system_cron_runner
 

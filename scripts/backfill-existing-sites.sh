@@ -84,6 +84,12 @@ sync_cache() {
   chown "$APP_FILE_OWNER" "$APP_CREDS_FILE" 2>/dev/null || true
 }
 
+purge_fastcgi_cache() {
+  if [ -d /tmp/nginx-cache ]; then
+    find /tmp/nginx-cache -mindepth 1 -delete 2>/dev/null || true
+  fi
+}
+
 ensure_scanner_block_snippet() {
   mkdir -p "$(dirname "$SCANNER_BLOCK_SNIPPET")"
   cat > "$SCANNER_BLOCK_SNIPPET" <<'NGINX'
@@ -1172,6 +1178,9 @@ sync_cache
 echo ""
 echo "--- Nginx / PHP-FPM 설정 검증 ---"
 nginx -t && systemctl reload nginx
+if [ "$UPDATED" -gt 0 ]; then
+  purge_fastcgi_cache
+fi
 ensure_allmyreview_certificate
 systemctl reload php8.2-fpm 2>/dev/null || true
 ensure_system_cron_runner
