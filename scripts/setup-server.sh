@@ -213,7 +213,7 @@ http {
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript image/svg+xml;
 
     # FastCGI 캐시 설정
-    fastcgi_cache_path /tmp/nginx-cache levels=1:2 keys_zone=WPCACHE:32m max_size=256m inactive=24h;
+    fastcgi_cache_path /tmp/nginx-cache levels=1:2 keys_zone=WPCACHE:32m max_size=256m inactive=10d;
     fastcgi_cache_key "$scheme$request_method$host$request_uri";
 
     # 버퍼 최적화
