@@ -13,6 +13,13 @@ const BING_WEBMASTER_RETRY_BASE_MS = Math.max(
   250,
   Number(process.env.BING_WEBMASTER_RETRY_BASE_MS || 2000)
 );
+const BING_URL_SUBMISSION_SITE_URL = (
+  process.env.BING_URL_SUBMISSION_SITE_URL || "https://allmyreview.site"
+).trim();
+const BING_URL_SUBMISSION_BATCH_SIZE = Math.max(
+  1,
+  Number(process.env.BING_URL_SUBMISSION_BATCH_SIZE || 100)
+);
 
 export type BingSyncResult = {
   siteUrl: string;
@@ -20,6 +27,13 @@ export type BingSyncResult = {
   added: boolean;
   feedSubmitted: boolean;
   notes: string[];
+  errors: string[];
+};
+
+export type BingUrlSubmissionResult = {
+  siteUrl: string;
+  submitted: number;
+  batches: number;
   errors: string[];
 };
 
@@ -54,7 +68,7 @@ function buildFeedUrl(siteUrl: string) {
   return `${normalized}sitemap_index.xml`;
 }
 
-async function callBing(method: string, payload: Record<string, string>) {
+async function callBing(method: string, payload: Record<string, unknown>) {
   if (!BING_WEBMASTER_API_KEY) {
     throw new Error("BING_WEBMASTER_API_KEY is not configured");
   }
@@ -125,6 +139,72 @@ async function callBing(method: string, payload: Record<string, string>) {
 
 export function isBingWebmasterSyncEnabled() {
   return Boolean(BING_WEBMASTER_API_KEY);
+}
+
+function chunkUrls(urls: string[], chunkSize: number) {
+  const chunks: string[][] = [];
+  for (let index = 0; index < urls.length; index += chunkSize) {
+    chunks.push(urls.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+function normalizeSubmissionUrls(urls: string[]) {
+  return Array.from(
+    new Set(
+      urls
+        .map((url) => {
+          const trimmed = url.trim();
+          if (!trimmed) return "";
+          try {
+            return new URL(trimmed).toString();
+          } catch {
+            return "";
+          }
+        })
+        .filter(Boolean)
+    )
+  );
+}
+
+export async function submitBingUrls(
+  urls: string[],
+  siteUrl = BING_URL_SUBMISSION_SITE_URL
+): Promise<BingUrlSubmissionResult> {
+  const normalizedSiteUrl = normalizeSiteUrl(siteUrl);
+  const normalizedUrls = normalizeSubmissionUrls(urls);
+  const errors: string[] = [];
+
+  if (normalizedUrls.length === 0) {
+    return {
+      siteUrl: normalizedSiteUrl,
+      submitted: 0,
+      batches: 0,
+      errors,
+    };
+  }
+
+  const batches = chunkUrls(normalizedUrls, BING_URL_SUBMISSION_BATCH_SIZE);
+  let submitted = 0;
+
+  for (const batch of batches) {
+    try {
+      await callBing("SubmitUrlBatch", {
+        siteUrl: normalizedSiteUrl,
+        urlList: batch,
+      });
+      submitted += batch.length;
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return {
+    siteUrl: normalizedSiteUrl,
+    submitted,
+    batches: batches.length,
+    errors,
+  };
 }
 
 export async function syncBingSite(siteUrl: string): Promise<BingSyncResult> {

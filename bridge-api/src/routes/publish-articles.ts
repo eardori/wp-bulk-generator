@@ -8,6 +8,10 @@ import { sanitizeGeneratedArticle } from "../lib/article-sanitizer.js";
 import { updateDashboardSiteCache } from "../lib/dashboard-cache.js";
 import { buildBusinessSchemaFromHtml, stripReviewReferenceMarkers } from "../lib/business-schema.js";
 import {
+  isBingWebmasterSyncEnabled,
+  submitBingUrls,
+} from "../lib/bing-webmaster.js";
+import {
   getSiteDirForTarget,
   isRemoteTarget,
   resolveSiteTarget,
@@ -926,6 +930,24 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
               error: false,
             };
           });
+          if (isBingWebmasterSyncEnabled()) {
+            const bingResult = await submitBingUrls([result.postUrl]);
+            if (bingResult.errors.length > 0) {
+              send({
+                type: "progress",
+                articleId: article.id,
+                siteSlug: article.siteSlug,
+                message: `Bing URL 제출 경고: ${bingResult.errors[0]}`,
+              });
+            } else {
+              send({
+                type: "progress",
+                articleId: article.id,
+                siteSlug: article.siteSlug,
+                message: `Bing URL 제출 완료`,
+              });
+            }
+          }
           send({
             type: "published",
             articleId: article.id,
