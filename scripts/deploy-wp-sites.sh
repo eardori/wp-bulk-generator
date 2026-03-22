@@ -508,7 +508,7 @@ server {
         fastcgi_read_timeout 120s;
 
         fastcgi_cache WPCACHE;
-        fastcgi_cache_valid 200 60m;
+        fastcgi_cache_valid 200 24h;
         fastcgi_cache_valid 404 1m;
         fastcgi_cache_lock on;
         fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
@@ -591,7 +591,7 @@ server {
         fastcgi_read_timeout 120s;
 
         fastcgi_cache WPCACHE;
-        fastcgi_cache_valid 200 60m;
+        fastcgi_cache_valid 200 24h;
         fastcgi_cache_valid 404 1m;
         fastcgi_cache_lock on;
         fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
