@@ -188,6 +188,179 @@ function cleanup_review_image_labels($html, $title) {
   return $html;
 }
 
+function title_still_promotional($title) {
+  $title = trim((string) $title);
+  if ($title === '') {
+    return false;
+  }
+
+  $patterns = array(
+    '/SNS/u',
+    '/핫한|뜨는|핫플/u',
+    '/끝판왕|압도적|압도적인/u',
+    '/성공\s*보장/u',
+    '/인생/u',
+    '/완벽/u',
+    '/실화\?/u',
+    '/후회할/u',
+    '/꿀팁/u',
+    '/최고급|최상급/u',
+    '/비교\s*불가|비교불가/u',
+    '/비교불허|비교될\s*수\s*없는/u',
+    '/찐후기|찐\s*맛집/u',
+    '/200%/u',
+    '/외국인(?:도)?\s*(?:인정한|호평|반한)/u',
+    '/외국인\s*친구/u',
+    '/입소문|성지/u',
+    '/처음\s*가봤는데|대만족|솔직후기/u',
+    '/최애|방문\s*전\s*꼭/u',
+    '/이\s*가격에/u',
+    '/글로벌\s*입맛/u',
+    '/특별한\s*경험/u',
+    '/A to Z/i',
+  );
+
+  foreach ($patterns as $pattern) {
+    if (preg_match($pattern, $title)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function infer_structured_place_name($slug, $title) {
+  $title_has_seolya = mb_strpos($title, '설야갈비') !== false;
+  $title_has_cheongdam = mb_strpos($title, '청담') !== false;
+  $slug_has_seolya = stripos($slug, 'seolya') !== false || stripos($slug, 'seolyagalbi') !== false;
+  $slug_has_galbi = stripos($slug, 'galbi') !== false;
+  $slug_has_cheongdam = stripos($slug, 'cheongdam') !== false;
+
+  if (
+    preg_match('/설야갈비\s*청담/u', $title) ||
+    ($title_has_seolya && $title_has_cheongdam) ||
+    (($slug_has_seolya || $slug_has_galbi) && $slug_has_cheongdam && $slug_has_galbi)
+  ) {
+    return '설야갈비 청담';
+  }
+
+  if (preg_match('/^\s*([^:：|]+?)\s*[:：]/u', $title, $matches)) {
+    return trim((string) $matches[1]);
+  }
+
+  return trim((string) $title);
+}
+
+function infer_structured_angle($slug) {
+  $slug = (string) $slug;
+
+  if (preg_match('/menu-(guide|analysis)|menu/i', $slug)) {
+    return '메뉴와 가격 정리';
+  }
+
+  if (preg_match('/family-(gathering|guide|review)|family/i', $slug)) {
+    return '가족 모임 가이드';
+  }
+
+  if (preg_match('/first-visit|visit-guide/i', $slug)) {
+    return '첫 방문 가이드';
+  }
+
+  if (preg_match('/compare|difference|different/i', $slug)) {
+    return '차별점 정리';
+  }
+
+  if (preg_match('/date|course/i', $slug)) {
+    return '분위기와 방문 포인트 정리';
+  }
+
+  if (preg_match('/review/i', $slug)) {
+    return '방문 정보와 메뉴 정리';
+  }
+
+  return '방문 가이드';
+}
+
+function build_structured_title($slug, $current_title) {
+  $place_name = infer_structured_place_name($slug, $current_title);
+  $angle = infer_structured_angle($slug);
+
+  if ($place_name === '') {
+    return trim((string) $current_title);
+  }
+
+  return trim($place_name . ': ' . $angle);
+}
+
+function cleanup_promotional_title($title, $slug = '') {
+  $title = trim((string) $title);
+
+  $regex_replacements = array(
+    '/리뷰\s*\d+개\s*분석[!！]?\s*[:：!,-]?\s*/u' => '',
+    '/SNS(?:서)?\s*난리난\s*/u' => '',
+    '/웨이팅\s*\d+\s*분\??\s*/u' => '',
+    '/웨이팅\s*없이/u' => '방문 전 참고할',
+    '/맛잘알\s*픽/u' => '추천 포인트',
+    '/찐\s*맛집/u' => '추천할 만한 곳',
+    '/현지인(?:이|도)?\s*인정한\s*/u' => '',
+    '/실패\s*없는\s*선택/u' => '무난한 선택',
+    '/후회\s*없는\s*선택/u' => '고려해볼 만한 선택',
+    '/완벽한\s*선택/u' => '가볼 만한 선택',
+    '/완벽\s*가이드/u' => '방문 가이드',
+    '/완벽\s*공략/u' => '방문 가이드',
+    '/완벽\s*분석/u' => '분석',
+    '/완벽\s*정리/u' => '정리',
+    '/완전\s*정복/u' => '정리',
+    '/전격\s*해부/u' => '정리',
+    '/극찬(?:하는|한|할까)?/u' => '호평',
+    '/난리난/u' => '주목받는',
+    '/요즘\s*(?:핫한|뜨는)/u' => '주목받는',
+    '/핫플/u' => '관심받는 곳',
+    '/SNS\s*핫플/u' => 'SNS 관심을 받은 곳',
+    '/SNS\s*인기/u' => 'SNS 관심',
+    '/SNS\s*사진(?:만큼)?/u' => '사진',
+    '/인기\s*폭발/u' => '주목받는',
+    '/성공\s*보장/u' => '방문 가이드',
+    '/놓치면\s*후회할/u' => '추천',
+    '/끝판왕/u' => '만족도 높은',
+    '/비교\s*불가/u' => '차별점이 돋보이는',
+    '/비교불가/u' => '차별점이 돋보이는',
+    '/인생\s*갈비/u' => '대표 갈비',
+    '/꿀팁\s*공개/u' => '방문 팁',
+    '/실화\?/u' => '',
+    '/가성비\s*갑/u' => '가성비가 좋은',
+    '/TOP\s*\d+/iu' => '추천',
+    '/꼭\s*먹어야\s*할\s*메뉴/u' => '추천 메뉴',
+  );
+
+  foreach ($regex_replacements as $pattern => $replacement) {
+    $title = preg_replace($pattern, $replacement, $title);
+  }
+
+  $title = preg_replace('/추천\s*추천/u', '추천', $title);
+  $title = preg_replace('/추천\s*메뉴\s*추천/u', '추천 메뉴', $title);
+  $title = preg_replace('/가이드\s*가이드/u', '가이드', $title);
+  $title = preg_replace('/분석\s*분석/u', '분석', $title);
+  $title = preg_replace('/정리\s*정리/u', '정리', $title);
+  $title = preg_replace('/차별점이\s*돋보이는한/u', '차별점이 돋보이는', $title);
+  $title = preg_replace('/만족도\s*만족도\s*높은/u', '만족도 높은', $title);
+  $title = preg_replace('/\s{2,}/u', ' ', $title);
+  $title = preg_replace('/\s+([,.;:!?])/u', '$1', $title);
+  $title = preg_replace('/([:：-])\s*([,.;:!?])/u', '$2', $title);
+  $title = preg_replace('/[!！]{2,}/u', '!', $title);
+  $title = preg_replace('/\?\?+/u', '?', $title);
+  $title = preg_replace('/\s*[:：-]\s*$/u', '', $title);
+  $title = preg_replace('/^\s*[:：-]\s*/u', '', $title);
+  if ($slug !== '') {
+    $structured = build_structured_title($slug, $title);
+    if ($structured !== '') {
+      $title = $structured;
+    }
+  }
+
+  return trim((string) $title);
+}
+
 function cleanup_existing_post_language($html, $title = '') {
   $html = (string) $html;
 
@@ -626,8 +799,9 @@ $posts = get_posts(array(
 ));
 
 foreach ($posts as $post) {
-  $title = wp_strip_all_tags($post->post_title);
-  $short = mb_substr($title, 0, 35);
+  $original_title = wp_strip_all_tags($post->post_title);
+  $title = cleanup_promotional_title($original_title, (string) $post->post_name);
+  $short = mb_substr($title ?: $original_title, 0, 35);
   $original_content = (string) $post->post_content;
   $content_without_schemas = strip_json_ld_scripts($original_content);
   $content = normalize_health_food_format(
@@ -655,8 +829,9 @@ foreach ($posts as $post) {
   $current_schema_signature = jsonld_signature($original_content);
   $desired_schema_signature = jsonld_signature($schema_html);
   $content_unchanged = normalize_html_signature($content_without_schemas) === normalize_html_signature($content);
+  $title_unchanged = $original_title === $title;
 
-  if ($content_unchanged && $current_schema_signature === $desired_schema_signature) {
+  if ($content_unchanged && $title_unchanged && $current_schema_signature === $desired_schema_signature) {
     $skipped++;
     echo "  ⏭ #{$post->ID} \"{$short}...\" (최신 GEO 적용됨)\n";
     continue;
@@ -665,6 +840,7 @@ foreach ($posts as $post) {
   $new_content = $content . $schema_html;
   $result = wp_update_post(array(
     'ID' => $post->ID,
+    'post_title' => $title,
     'post_content' => $new_content,
   ), true);
 

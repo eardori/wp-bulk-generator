@@ -242,6 +242,33 @@ function summarizeContentPrompt(prompt: string, limit = 90): string {
   return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
 }
 
+function normalizeRestaurantPlaceTitle(title: string): string {
+  const normalized = (title || "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*[-:|].*$/, "")
+    .trim();
+
+  return normalized || "방문 장소";
+}
+
+function buildStructuredRestaurantTitleFromAngle(placeTitle: string, angleLabel: string): string {
+  const place = normalizeRestaurantPlaceTitle(placeTitle);
+
+  const angleMap: Record<string, string> = {
+    "첫 방문 포인트 정리": "첫 방문 가이드",
+    "메뉴 & 가격 정리": "메뉴와 가격 정리",
+    "데이트 & 분위기 맛집": "분위기와 방문 포인트 정리",
+    "가성비 & 만족도 정리": "가격대와 방문 포인트 정리",
+    "대표 메뉴 선택 가이드": "추천 메뉴 정리",
+    "타 가게와의 차별점": "차별점 정리",
+    "가족 & 단체 방문 완전 가이드": "가족 모임 가이드",
+    "인기 이유 & 방문 전 체크": "방문 전 체크포인트",
+  };
+
+  const angle = angleMap[angleLabel] || "방문 가이드";
+  return `${place}: ${angle}`;
+}
+
 function firstNonEmptyText(...values: Array<string | undefined | null>): string {
   for (const value of values) {
     const normalized = value?.trim();
@@ -919,7 +946,7 @@ ${normalizedPrompt}
   const restaurantAngleConfigs = [
     {
       label: "첫 방문 포인트 정리",
-      titleFormat: `제목 형식: "[지역] [음식종류] 찾을 때 체크할 포인트" 또는 "[가게명] 첫인상부터 메뉴 선택까지" — 과장 없이 구체적으로`,
+      titleFormat: `제목 형식: "[가게명] 첫 방문 가이드" 또는 "[지역] [음식종류] 방문 전 체크할 점" — 정보형 문장으로 차분하게`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 방문하게 된 계기 & 찾아가는 법
 ② 들어서는 순간 첫인상 & 분위기
@@ -929,17 +956,17 @@ ${normalizedPrompt}
     },
     {
       label: "메뉴 & 가격 정리",
-      titleFormat: `제목 형식: "[주메뉴] 가격 정리" 또는 "[가게명]에서 뭘 시킬지 고민될 때" — 가게명보다 음식/메뉴를 제목 앞에 배치`,
+      titleFormat: `제목 형식: "[가게명] 메뉴와 가격 정리" 또는 "[주메뉴] 메뉴 선택 가이드" — 메뉴와 가격 정보가 바로 드러나게`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 전체 메뉴판 & 가격 총정리 (표로 정리)
 ② 시그니처 메뉴 상세 정리 (맛, 양, 비주얼)
 ③ 사이드 & 추가 메뉴 구성 비교
-④ 대표 메뉴 TOP 3 비교
-⑤ 처음 방문자 추천 조합 & 피해야 할 메뉴`,
+④ 대표 메뉴 비교 정리
+⑤ 처음 방문자 추천 조합`,
     },
     {
       label: "데이트 & 분위기 맛집",
-      titleFormat: `제목 형식: "데이트하기 좋은 [음식종류]집" 또는 "[지역] 분위기 좋은 [음식종류] 맛집" — 분위기/데이트 키워드를 제목에 포함`,
+      titleFormat: `제목 형식: "[가게명] 분위기와 방문 포인트 정리" 또는 "[지역] 데이트 방문 가이드" — 분위기 정보를 차분하게`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 공간 & 인테리어 상세 묘사 (조명, 좌석, 동선)
 ② 프라이빗한 좌석 vs 오픈 좌석 구성
@@ -949,27 +976,27 @@ ${normalizedPrompt}
     },
     {
       label: "가성비 & 만족도 정리",
-      titleFormat: `제목 형식: "가성비 [음식종류] 찾다가 발견한 곳" 또는 "[가격대]에 이 퀄리티?" — 가격/가성비 키워드를 제목에 포함`,
+      titleFormat: `제목 형식: "[가게명] 가격대와 방문 포인트 정리" 또는 "[가격대] [음식종류] 방문 가이드" — 가격 정보 중심으로`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 가격표 & 경쟁 가게 대비 가성비 분석
-② 양 & 퀄리티 — 실제로 배부를까?
+② 양 & 퀄리티 정리
 ③ 만족도가 갈리는 포인트
-④ 더 저렴하게 먹는 꿀팁 (타이밍, 세트 조합)
-⑤ 총합 가성비 점수 & 추천 기준`,
+④ 세트 조합과 주문 포인트
+⑤ 가성비 판단 기준 정리`,
     },
     {
       label: "대표 메뉴 선택 가이드",
-      titleFormat: `제목 형식: "꼭 먹어야 할 메뉴 TOP [숫자]" 또는 "[가게명]에서 먼저 볼 메뉴 정리" — 추천/TOP 키워드로 시작`,
+      titleFormat: `제목 형식: "[가게명] 추천 메뉴 정리" 또는 "[가게명] 대표 메뉴 선택 가이드" — 메뉴 선택 도움 중심으로`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
-① 베스트 메뉴를 고른 기준
-② TOP 1 — 압도적 1위 메뉴 심층 정리
-③ TOP 2~3 — 강력 추천 메뉴 상세 비교
-④ 의외의 숨겨진 메뉴 & 직원 추천 메뉴
-⑤ 이 조합이 최고입니다 (주메뉴 + 사이드 세트)`,
+① 대표 메뉴를 고른 기준
+② 많이 선택되는 메뉴 정리
+③ 함께 비교할 메뉴 정리
+④ 사이드 메뉴와 추가 주문 포인트
+⑤ 처음 방문자 추천 조합`,
     },
     {
       label: "타 가게와의 차별점",
-      titleFormat: `제목 형식: "다른 [음식종류]집이랑 다른 점" 또는 "왜 이 가게만 줄을 서는가" — 비교/차별화 키워드 포함`,
+      titleFormat: `제목 형식: "[가게명] 차별점 정리" 또는 "[음식종류] 비교 포인트" — 비교 기준이 보이게`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 비슷한 가게들과 무엇이 다른가
 ② 이 가게만의 시그니처 조리법 & 맛의 비결
@@ -979,7 +1006,7 @@ ${normalizedPrompt}
     },
     {
       label: "가족 & 단체 방문 완전 가이드",
-      titleFormat: `제목 형식: "가족끼리 가기 좋은 [음식종류]집" 또는 "아이와 함께 가기 전 체크할 점" — 가족/아이 키워드 포함`,
+      titleFormat: `제목 형식: "[가게명] 가족 모임 가이드" 또는 "[지역] 가족 방문 체크리스트" — 가족 방문 정보 중심으로`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
 ① 단체석 & 유아시설 (아이 의자, 수유실, 키즈존)
 ② 어르신·아이 함께 먹기 좋은 메뉴 구성
@@ -989,12 +1016,12 @@ ${normalizedPrompt}
     },
     {
       label: "인기 이유 & 방문 전 체크",
-      titleFormat: `제목 형식: "요즘 많이 찾는 [음식종류]집" 또는 "[가게명] 방문 전 체크할 포인트" — 인기/현실 키워드 포함`,
+      titleFormat: `제목 형식: "[가게명] 방문 전 체크포인트" 또는 "[음식종류] 첫 방문 체크리스트" — 방문 전 필요한 정보를 중심으로`,
       h2Structure: `H2 소제목 5개 (이 순서 그대로):
-① 왜 지금 이 가게가 핫한가 (인기 배경)
-② 인스타 사진 vs 실제 분위기 비교
+① 방문 전 먼저 볼 기본 정보
+② 실제 공간과 분위기 정리
 ③ 방문 전 알아둘 포인트
-④ 포토스팟 & 감성 사진 잘 나오는 각도 팁
+④ 좌석·대기·동선 포인트
 ⑤ 붐비는 시간대와 예약 체크 포인트`,
     },
   ];
@@ -1062,6 +1089,8 @@ ${promptInstructionBlock}
 15. 같은 배치의 다른 글과 겹치지 않도록, 도입부 비유·핵심 메뉴 선정·결론 문장·추천 대상 설명을 이번 글만의 방식으로 바꿀 것
 16. 참고 후기 건수, 후기 키워드 횟수, "총 50개 리뷰", "방문자들이 공통적으로", "리뷰 데이터", "리뷰를 보면" 같은 메타 설명은 최종 HTML/제목/FAQ/요약문에 쓰지 말 것
 ${placeHasReviewImages ? '17. 사진이 있는 리뷰는 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입하되, 이 placeholder 주석 외에는 리뷰 인덱스를 노출하지 말 것' : ""}
+18. 제목과 메타타이틀에 "리뷰 141개 분석", "SNS 난리난", "웨이팅 0분?", "TOP 3", "극찬", "완벽한 선택", "실패 없는 선택", "찐 맛집", "맛잘알 픽", "완벽 가이드", "끝판왕", "요즘 핫한", "비교불가", "놓치면 후회할" 같은 과장 카피를 절대 쓰지 말 것
+19. 제목은 정보형 문장으로 작성하고, 가게명/메뉴/방문 상황을 중심으로 차분하게 표현할 것
 
 ## GEO (AI 검색 최적화) 규칙:
 G1. 인용 가능 단락(Citable Passage): 각 H2 섹션 첫 부분에 해당 질문에 대한 완결된 답변을 3~5문장으로 작성할 것. 주변 맥락 없이 그 단락만 읽어도 의미가 통해야 함
@@ -1187,10 +1216,12 @@ ${promptInstructionBlock}
 	11. 제품의 장단점을 균형있게 서술 (E-E-A-T 신뢰도 확보 — 단점 없으면 광고로 인식)
 	12. HTML 형식으로 작성 (h2, h3, p, ul, li, strong, em, table 태그 사용)
 	13. <h2> 사용법 섹션에는 <ol> 단계별 리스트 필수 (HowTo 구조)
-	14. 리뷰 전문의 [리뷰#숫자]와 내부 인덱스는 작성용 메모이므로 최종 HTML/제목/FAQ/요약문에 절대 노출하지 말 것
-	15. 같은 배치의 다른 글과 겹치지 않도록, 제목 톤·도입부 사례·핵심 장단점 배열 순서·결론 문장을 이번 글만의 방식으로 바꿀 것
+14. 리뷰 전문의 [리뷰#숫자]와 내부 인덱스는 작성용 메모이므로 최종 HTML/제목/FAQ/요약문에 절대 노출하지 말 것
+15. 같은 배치의 다른 글과 겹치지 않도록, 제목 톤·도입부 사례·핵심 장단점 배열 순서·결론 문장을 이번 글만의 방식으로 바꿀 것
 		${hasAnyReviewImages ? '16. 리뷰 사진이 있는 경우 글 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입하되, 이 placeholder 주석 외에는 리뷰 인덱스를 노출하지 말 것' : ""}
 	17. 리뷰에 없는 효능, 사용 기간, 개선 수치를 임의로 만들지 말고 "리뷰상", "대체로", "많이 언급된"처럼 근거 기반 표현만 사용할 것
+	18. 제목과 메타타이틀에 "리뷰 141개 분석", "SNS 난리난", "웨이팅 0분?", "TOP 3", "극찬", "완벽한 선택", "실패 없는 선택", "찐 맛집", "맛잘알 픽", "완벽 가이드", "끝판왕", "요즘 핫한", "비교불가", "놓치면 후회할" 같은 과장 카피를 절대 쓰지 말 것
+	19. 제목은 정보형 문장으로 작성하고, 실제 제품명/핵심 특징/사용 상황을 차분하게 배치할 것
 
 	## GEO (AI 검색 최적화) 규칙:
 	G1. 인용 가능 단락(Citable Passage): 각 H2 섹션 첫 부분에 해당 질문에 대한 완결된 답변을 3~5문장으로 작성할 것. 주변 맥락 없이 그 단락만 읽어도 의미가 통해야 함
@@ -1277,6 +1308,9 @@ JSON 형식으로 응답하세요:
   const wordCount = estimateVisibleWordCount(fullHtml);
 
   const reviewImages = buildReviewImagesFromIndices(availableReviewsForImages, finalUsedReviewImageIndices);
+  const structuredRestaurantTitle = isRestaurant
+    ? buildStructuredRestaurantTitleFromAngle(sourceTitle, thisRestaurantAngleConfig?.label || "")
+    : parsed.title;
 
   return sanitizeGeneratedArticle({
     id: `${site.slug}-${Date.now()}-${articleVariation}`,
@@ -1285,8 +1319,8 @@ JSON 형식으로 응답하세요:
     personaName: persona.name,
     sourceTitle,
     targetQuestion: promptSummary,
-    title: parsed.title,
-    metaTitle: parsed.metaTitle || parsed.title,
+    title: structuredRestaurantTitle,
+    metaTitle: isRestaurant ? structuredRestaurantTitle : parsed.metaTitle || parsed.title,
     metaDescription: parsed.metaDescription || parsed.excerpt || "",
     slug: parsed.slug || site.slug + "-" + Date.now(),
     htmlContent: fullHtml,

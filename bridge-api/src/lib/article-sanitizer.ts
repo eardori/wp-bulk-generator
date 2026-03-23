@@ -43,6 +43,44 @@ const REVIEW_META_REPLACEMENTS: Array<[RegExp, string]> = [
   [/실제\s*사용\s*사진/gu, "참고 이미지"],
 ];
 
+const TITLE_COPY_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/리뷰\s*\d+개\s*분석[!！]?\s*[:：!,-]?\s*/gu, ""],
+  [/SNS(?:서)?\s*난리난\s*/gu, ""],
+  [/웨이팅\s*\d+\s*분\??\s*/gu, ""],
+  [/웨이팅\s*없이/gu, "방문 전 참고할"],
+  [/맛잘알\s*픽/gu, "추천 포인트"],
+  [/찐\s*맛집/gu, "추천할 만한 곳"],
+  [/현지인(?:이|도)?\s*인정한/gu, ""],
+  [/실패\s*없는\s*선택/gu, "무난한 선택"],
+  [/후회\s*없는\s*선택/gu, "고려해볼 만한 선택"],
+  [/완벽한\s*선택/gu, "가볼 만한 선택"],
+  [/완벽\s*가이드/gu, "방문 가이드"],
+  [/완벽\s*공략/gu, "방문 가이드"],
+  [/완벽\s*분석/gu, "분석"],
+  [/완벽\s*정리/gu, "정리"],
+  [/완전\s*정복/gu, "정리"],
+  [/전격\s*해부/gu, "정리"],
+  [/극찬(?:하는|한|할까)?/gu, "호평"],
+  [/난리난/gu, "주목받는"],
+  [/요즘\s*(?:핫한|뜨는)/gu, "주목받는"],
+  [/핫플/gu, "관심받는 곳"],
+  [/SNS\s*핫플/gu, "SNS 관심을 받은 곳"],
+  [/SNS\s*인기/gu, "SNS 관심"],
+  [/SNS\s*사진(?:만큼)?/gu, "사진"],
+  [/인기\s*폭발/gu, "주목받는"],
+  [/성공\s*보장/gu, "방문 가이드"],
+  [/놓치면\s*후회할/gu, "추천"],
+  [/끝판왕/gu, "만족도 높은"],
+  [/비교\s*불가/gu, "차별점이 돋보이는"],
+  [/비교불가/gu, "차별점이 돋보이는"],
+  [/인생\s*갈비/gu, "대표 갈비"],
+  [/꿀팁\s*공개/gu, "방문 팁"],
+  [/실화\?/gu, ""],
+  [/가성비\s*갑/gu, "가성비가 좋은"],
+  [/TOP\s*\d+/giu, "추천"],
+  [/꼭\s*먹어야\s*할\s*메뉴/gu, "추천 메뉴"],
+];
+
 const EMPTY_INFO_TEXT_PATTERN =
   /^(?:전화|주소|지번주소|지역|영업시간|주차|예약(?:여부)?|가격대|대표메뉴|메뉴|가격|편의시설|찾아가는길)\s*[:：-]?\s*(?:정보 없음|문의 필요|확인 필요)\s*$/u;
 
@@ -72,6 +110,29 @@ function sanitizeMetaReviewPhrases(text: string): string {
   sanitized = sanitized.replace(/\s{2,}/g, " ");
   sanitized = sanitized.replace(/\s+([,.;:!?])/g, "$1");
   sanitized = sanitized.replace(/([:：-])\s*(?:<\/[^>]+>)?$/gu, "");
+
+  return sanitized.trim();
+}
+
+function sanitizeTitleCopy(text: string): string {
+  let sanitized = text || "";
+
+  for (const [pattern, replacement] of TITLE_COPY_REPLACEMENTS) {
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+
+  sanitized = sanitized.replace(/추천\s*추천/gu, "추천");
+  sanitized = sanitized.replace(/추천\s*메뉴\s*추천/gu, "추천 메뉴");
+  sanitized = sanitized.replace(/가이드\s*가이드/gu, "가이드");
+  sanitized = sanitized.replace(/분석\s*분석/gu, "분석");
+  sanitized = sanitized.replace(/정리\s*정리/gu, "정리");
+  sanitized = sanitized.replace(/\s{2,}/g, " ");
+  sanitized = sanitized.replace(/\s+([,.;:!?])/g, "$1");
+  sanitized = sanitized.replace(/([:：-])\s*([,.;:!?])/gu, "$2");
+  sanitized = sanitized.replace(/[!！]{2,}/gu, "!");
+  sanitized = sanitized.replace(/\?\?+/gu, "?");
+  sanitized = sanitized.replace(/\s*[:：-]\s*$/gu, "");
+  sanitized = sanitized.replace(/^\s*[:：-]\s*/gu, "");
 
   return sanitized.trim();
 }
@@ -141,8 +202,12 @@ function normalizeHealthFoodStructureInHtml(html: string): string {
 export function sanitizeGeneratedArticle<T extends GeneratedArticleLike>(article: T): T {
   return {
     ...article,
-    title: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.title)),
-    metaTitle: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.metaTitle)),
+    title: sanitizeTitleCopy(
+      sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.title))
+    ),
+    metaTitle: sanitizeTitleCopy(
+      sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.metaTitle))
+    ),
     metaDescription: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.metaDescription)),
     htmlContent: normalizeHealthFoodStructureInHtml(
       sanitizeInternalReviewRefsInHtml(article.htmlContent)

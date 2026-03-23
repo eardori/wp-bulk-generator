@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 
 DEFAULT_CREDENTIAL_PATHS = [
@@ -23,6 +23,22 @@ def build_site_targets(base: str) -> list[str]:
         f"{base}sitemap_index.xml",
         f"{base}wp-sitemap.xml",
     ]
+
+
+def normalize_public_url(url: str) -> str:
+    parsed = urlsplit((url or "").strip())
+    host = (parsed.hostname or "").lower()
+    scheme = parsed.scheme.lower() or "https"
+    path = parsed.path or "/"
+    query = parsed.query
+
+    if host.endswith(".allmyreview.site"):
+        scheme = "https"
+
+    if path == "":
+        path = "/"
+
+    return urlunsplit((scheme, host, path, query, ""))
 
 
 def read_json_if_exists(path: Path) -> object:
@@ -42,10 +58,11 @@ def build_urls(cache_path: Path, credentials_path: Path | None = None) -> list[s
         url = (site or {}).get("url")
         domain = (site or {}).get("domain")
         if url:
-            base = url.rstrip("/") + "/"
+            base = normalize_public_url(url).rstrip("/") + "/"
         elif domain:
-            scheme = "https" if str(domain).endswith(".allmyreview.site") else "http"
-            base = f"{scheme}://{domain}/"
+            normalized_domain = str(domain).lower()
+            scheme = "https" if normalized_domain.endswith(".allmyreview.site") else "http"
+            base = f"{scheme}://{normalized_domain}/"
         else:
             continue
 
@@ -61,6 +78,7 @@ def build_urls(cache_path: Path, credentials_path: Path | None = None) -> list[s
             link = (post or {}).get("link")
             if not link:
                 continue
+            link = normalize_public_url(link)
 
             parsed = urlsplit(link)
             base = f"{parsed.scheme}://{parsed.netloc}/"
