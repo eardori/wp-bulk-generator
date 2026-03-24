@@ -567,6 +567,11 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin";
     include $SCANNER_BLOCK_SNIPPET;
 
+    if (\$args ~ "(^|&)p=") { set \$skip_cache 1; }
+    if (\$args ~ "(^|&)p=") { set \$invalid_post_query 1; }
+    if (\$arg_p ~ "^[0-9]+\$") { set \$invalid_post_query 0; }
+    if (\$invalid_post_query = 1) { return 301 https://\$host\$uri; }
+
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
     }
@@ -645,6 +650,11 @@ server {
     add_header X-Frame-Options SAMEORIGIN;
     add_header Referrer-Policy "strict-origin-when-cross-origin";
     include $SCANNER_BLOCK_SNIPPET;
+
+    if (\$args ~ "(^|&)p=") { set \$skip_cache 1; }
+    if (\$args ~ "(^|&)p=") { set \$invalid_post_query 1; }
+    if (\$arg_p ~ "^[0-9]+\$") { set \$invalid_post_query 0; }
+    if (\$invalid_post_query = 1) { return 301 https://\$host\$uri; }
 
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
