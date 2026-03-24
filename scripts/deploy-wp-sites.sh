@@ -108,6 +108,41 @@ normalize_domain() {
   printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
 }
 
+build_home_description() {
+  python3 - "$1" "$2" <<'PY'
+import re
+import sys
+
+title = re.sub(r"\s+", " ", (sys.argv[1] or "")).strip()
+tagline = re.sub(r"\s+", " ", (sys.argv[2] or "")).strip()
+source = f"{title} {tagline}"
+is_ko = any('\uac00' <= ch <= '\ud7a3' for ch in source)
+
+if is_ko:
+    base = tagline or "실용적인 방문 가이드와 추천 정보를 제공하는 사이트입니다."
+    if title and title not in base:
+        desc = f"{title}. {base}"
+    else:
+        desc = base
+    desc = desc.rstrip(".! ") + ". 실용적인 방문 팁과 메뉴 정보, 최신 게시글을 한곳에서 확인하세요."
+else:
+    base = tagline or "Practical guides, recommendations, and local tips."
+    if title and title.lower() not in base.lower():
+        desc = f"{title}. {base}"
+    else:
+        desc = base
+    desc = desc.rstrip(".! ") + ". Explore practical recommendations, detailed information, and the latest posts in one place."
+
+desc = re.sub(r"\s+", " ", desc).strip()
+if len(desc) < 70:
+    extra = " 믿을 수 있는 핵심 정보와 정리된 가이드를 빠르게 확인할 수 있습니다." if is_ko else " Find trustworthy highlights and clearly organized guides without extra noise."
+    desc = (desc + extra).strip()
+if len(desc) > 155:
+    desc = desc[:152].rstrip() + "..."
+print(desc)
+PY
+}
+
 validate_local_wordpress_runtime() {
   local site_dir="$1"
   local expected_url="$2"
@@ -1265,7 +1300,9 @@ SQL
 
   # ---- 3. 기본 설정 ----
   echo "  [3/7] 기본 설정..."
-  wp option update blogdescription "$TAGLINE" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  local HOME_DESCRIPTION
+  HOME_DESCRIPTION="$(build_home_description "$TITLE" "$TAGLINE")"
+  wp option update blogdescription "$HOME_DESCRIPTION" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
   wp option update permalink_structure "/%postname%/" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
   wp option update timezone_string "Asia/Seoul" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
   wp option update date_format "Y년 m월 d일" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
