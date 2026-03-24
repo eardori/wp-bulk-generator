@@ -84,6 +84,69 @@ type SendFn = (data: Record<string, unknown>) => void;
 const REMOTE_FETCH_TIMEOUT_MS = Number(process.env.WP_REMOTE_FETCH_TIMEOUT_MS || 20000);
 const WP_SITES_ROOT = process.env.WP_SITES_ROOT || "/var/www";
 
+function normalizeSiteDomain(value: string | undefined): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const withoutScheme = raw.replace(/^https?:\/\//i, "");
+  return withoutScheme.replace(/\/.*$/, "").trim().toLowerCase();
+}
+
+function getSiteBaseUrl(site: SiteCredential): string {
+  const domain = normalizeSiteDomain(site.domain) || normalizeSiteDomain(site.url);
+  if (domain) {
+    return `https://${domain}`;
+  }
+
+  return String(site.url || "").trim().replace(/\/$/, "");
+}
+
+function normalizeTrailingSlash(pathname: string): string {
+  if (!pathname || pathname === "/") return "/";
+  return pathname.replace(/\/+$/, "") + "/";
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizePublishedPostUrl(
+  rawUrl: unknown,
+  site: SiteCredential,
+  fallbackSlug?: string,
+  fallbackPostId?: number | null
+): string {
+  const baseUrl = getSiteBaseUrl(site);
+  const cleanSlug = String(fallbackSlug || "").trim().replace(/^\/+|\/+$/g, "");
+  const postId = parsePositiveInt(fallbackPostId);
+
+  if (typeof rawUrl === "string" && rawUrl.trim() && !/undefined/i.test(rawUrl)) {
+    try {
+      const parsed = new URL(rawUrl.trim());
+      const search = parsed.search || "";
+      if (search.includes("p=") && cleanSlug) {
+        return `${baseUrl}/${cleanSlug}/`;
+      }
+      if (search.includes("p=") && postId) {
+        return `${baseUrl}/?p=${postId}`;
+      }
+      return `${baseUrl}${normalizeTrailingSlash(parsed.pathname)}`;
+    } catch {
+      // fall through to deterministic fallback
+    }
+  }
+
+  if (cleanSlug) {
+    return `${baseUrl}/${cleanSlug}/`;
+  }
+
+  if (postId) {
+    return `${baseUrl}/?p=${postId}`;
+  }
+
+  return baseUrl;
+}
+
 function buildDashboardPostEntry(article: GeneratedArticle, result: PublishResult) {
   return {
     id: result.postId,
@@ -115,7 +178,7 @@ async function uploadToWordPress(
   contentType: string,
   site: SiteCredential
 ): Promise<{ id: number; url: string }> {
-  const baseUrl = site.url.replace(/\/$/, "");
+  const baseUrl = getSiteBaseUrl(site);
   const authHeader = "Basic " + Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
 
   const res = await fetch(`${baseUrl}/wp-json/wp/v2/media`, {
@@ -246,7 +309,7 @@ async function probeRemoteWordPress(site: SiteCredential): Promise<{
   usable: boolean;
   reason?: string;
 }> {
-  const baseUrl = site.url.replace(/\/$/, "");
+  const baseUrl = getSiteBaseUrl(site);
 
   try {
     const res = await fetch(`${baseUrl}/wp-json/`, {
@@ -289,7 +352,7 @@ async function probeRemoteWordPress(site: SiteCredential): Promise<{
 }
 
 function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replacedHtml: string): string {
-  const canonicalUrl = `${site.url.replace(/\/$/, "")}/${article.slug}/`;
+  const canonicalUrl = `${getSiteBaseUrl(site)}/${article.slug}/`;
   const cleanedHtml = stripReviewReferenceMarkers(replacedHtml);
   let finalHtml = cleanedHtml;
 
@@ -417,7 +480,7 @@ async function fetchRelatedPosts(
   category: string,
   maxPosts = 3
 ): Promise<Array<{ title: string; url: string }>> {
-  const baseUrl = site.url.replace(/\/$/, "");
+  const baseUrl = getSiteBaseUrl(site);
   const authHeader = "Basic " + Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
 
   try {
@@ -459,7 +522,7 @@ async function publishViaRestApi(
   site: SiteCredential,
   finalHtml: string
 ): Promise<PublishResult> {
-  const baseUrl = site.url.replace(/\/$/, "");
+  const baseUrl = getSiteBaseUrl(site);
   const authHeader =
     "Basic " +
     Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
@@ -549,14 +612,55 @@ async function publishViaRestApi(
   }
 
   const post = await postRes.json();
-  const postUrl = post.link || `${baseUrl}/?p=${post.id}`;
+  const postId = parsePositiveInt(post.id);
+  const postUrl = normalizePublishedPostUrl(post.link, site, article.slug, postId);
   await warmPublishedUrls(baseUrl, postUrl);
 
   return {
-    postId: post.id,
+    postId: postId || 0,
     postUrl,
     finalHtml,
   };
+}
+
+function resolvePublishedPostBySlug(
+  site: SiteCredential,
+  slug: string
+): { postId: number; postUrl: string } | null {
+  const target = resolveSiteTarget(site);
+  const siteDir = getLocalSiteDir(site);
+  const php = [
+    `$slug = ${JSON.stringify(slug)};`,
+    `$post = get_page_by_path($slug, OBJECT, 'post');`,
+    `if (!$post) {`,
+    `  $posts = get_posts(['name' => $slug, 'post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 1]);`,
+    `  $post = $posts[0] ?? null;`,
+    `}`,
+    `if (!$post) { exit(2); }`,
+    `echo wp_json_encode(['postId' => (int)$post->ID, 'postUrl' => (string)get_permalink($post->ID)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);`,
+  ].join(" ");
+
+  try {
+    const output = !isRemoteTarget(target)
+      ? execFileSync("wp", ["eval", php, `--path=${siteDir}`, "--allow-root"], {
+          encoding: "utf8",
+          timeout: 45000,
+        }).trim()
+      : execSsh(
+          target,
+          `wp eval ${shellQuote(php)} --path=${shellQuote(siteDir)} --allow-root`,
+          60000
+        ).trim();
+    const parsed = JSON.parse(output);
+    const postId = parsePositiveInt(parsed.postId);
+    if (!postId) return null;
+    return {
+      postId,
+      postUrl: normalizePublishedPostUrl(parsed.postUrl, site, slug, postId),
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function publishLocallyWithWpCli(
@@ -692,12 +796,26 @@ echo wp_json_encode([
     }
 
     const parsed = JSON.parse(output);
-    const baseUrl = site.url.replace(/\/$/, "");
-    const postUrl = parsed.postUrl || `${baseUrl}/?p=${parsed.postId}`;
+    let postId = parsePositiveInt(parsed.postId) || 0;
+    let postUrl = normalizePublishedPostUrl(parsed.postUrl, site, article.slug, postId);
+
+    if (!postId || /undefined/i.test(postUrl)) {
+      const recovered = resolvePublishedPostBySlug(site, article.slug);
+      if (recovered) {
+        postId = recovered.postId;
+        postUrl = recovered.postUrl;
+      }
+    }
+
+    if (!postId) {
+      throw new Error("발행 결과 검증 실패: post ID를 확인할 수 없습니다.");
+    }
+
+    const baseUrl = getSiteBaseUrl(site);
     await warmPublishedUrls(baseUrl, postUrl);
 
     return {
-      postId: Number(parsed.postId),
+      postId,
       postUrl,
       finalHtml,
     };
@@ -763,7 +881,7 @@ async function publishToWordPress(
 }
 
 async function updateLlmsTxt(site: SiteCredential): Promise<void> {
-  const baseUrl = site.url.replace(/\/$/, "");
+  const baseUrl = getSiteBaseUrl(site);
   const authHeader = "Basic " + Buffer.from(`${site.admin_user}:${site.app_pass}`).toString("base64");
 
   try {
