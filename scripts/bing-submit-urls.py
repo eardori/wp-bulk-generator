@@ -113,6 +113,31 @@ def collect_urls(web_root: Path) -> list[str]:
     return sorted(set(urls))
 
 
+def collect_urls_from_dashboard_cache(cache_path: Path) -> list[str]:
+    payload = json.loads(cache_path.read_text())
+    sites = payload.get("sites", {})
+    urls: list[str] = []
+    if not isinstance(sites, dict):
+        return urls
+    for site_data in sites.values():
+        if not isinstance(site_data, dict):
+            continue
+        posts = site_data.get("posts", [])
+        if not isinstance(posts, list):
+            continue
+        for post in posts:
+            if not isinstance(post, dict):
+                continue
+            link = post.get("link")
+            if not isinstance(link, str) or not link.strip():
+                continue
+            try:
+                urls.append(normalize_url(link))
+            except ValueError:
+                continue
+    return sorted(set(urls))
+
+
 def chunked(values: list[str], chunk_size: int) -> list[list[str]]:
     return [values[index : index + chunk_size] for index in range(0, len(values), chunk_size)]
 
@@ -123,6 +148,9 @@ def main() -> int:
     parser.add_argument("--site-url", required=True)
     parser.add_argument("--web-root", default="/var/www")
     parser.add_argument("--batch-size", type=int, default=100)
+    parser.add_argument("--max-urls", type=int, default=0)
+    parser.add_argument("--start-after-url")
+    parser.add_argument("--dashboard-cache-file")
     parser.add_argument("--sleep-seconds", type=float, default=1.5)
     parser.add_argument("--max-retries", type=int, default=5)
     parser.add_argument("--state-file", default="/tmp/bing-submit-urls-state.json")
@@ -132,17 +160,43 @@ def main() -> int:
     web_root = Path(args.web_root)
     state_path = Path(args.state_file)
 
-    urls = collect_urls(web_root)
-    print(f"Collected {len(urls)} URLs from {web_root}")
+    if args.dashboard_cache_file:
+        urls = collect_urls_from_dashboard_cache(Path(args.dashboard_cache_file))
+        source_label = args.dashboard_cache_file
+    else:
+        urls = collect_urls(web_root)
+        source_label = str(web_root)
+    print(f"Collected {len(urls)} URLs from {source_label}")
     if not urls:
         print("No URLs to submit")
+        return 0
+
+    start_after_url = normalize_url(args.start_after_url) if args.start_after_url else None
+    if start_after_url:
+        try:
+            start_index = urls.index(start_after_url) + 1
+        except ValueError:
+            print(f"Start-after URL not found: {start_after_url}")
+            return 1
+        urls = urls[start_index:]
+
+    if args.max_urls and args.max_urls > 0:
+        urls = urls[: args.max_urls]
+
+    if not urls:
+        print("No URLs selected for submission")
         return 0
 
     failed_batches: list[dict[str, object]] = []
     state: dict[str, object] = {
         "siteUrl": property_url,
+        "source": source_label,
         "totalUrls": len(urls),
+        "submittedUrls": len(urls),
         "submitted": 0,
+        "firstUrl": urls[0],
+        "lastUrl": urls[-1],
+        "startAfterUrl": start_after_url,
         "failedBatches": failed_batches,
     }
 
