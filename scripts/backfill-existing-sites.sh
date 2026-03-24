@@ -866,6 +866,35 @@ add_action('wp_head', function() {
 
 add_filter('wpseo_canonical', '__return_false', PHP_INT_MAX);
 
+function ai_get_home_document_title() {
+    $title = trim((string) get_bloginfo('name'));
+    if ($title === '') {
+        $title = trim((string) wp_parse_url(home_url('/'), PHP_URL_HOST));
+    }
+
+    if (function_exists('mb_substr')) {
+        return mb_substr($title, 0, 60);
+    }
+
+    return substr($title, 0, 60);
+}
+
+add_filter('pre_get_document_title', function($title) {
+    if (is_front_page() || is_home()) {
+        return ai_get_home_document_title();
+    }
+
+    return $title;
+}, PHP_INT_MAX);
+
+add_filter('document_title_parts', function($parts) {
+    if (!is_front_page() && !is_home()) {
+        return $parts;
+    }
+
+    return ['title' => ai_get_home_document_title()];
+}, PHP_INT_MAX);
+
 function ai_get_canonical_url() {
     if (is_front_page() || is_home()) {
         return home_url('/');
@@ -988,6 +1017,21 @@ function ai_dedupe_canonical_tags($html) {
     return preg_replace('/<\\/head>/i', $last . "\n</head>", $clean, 1) ?? $html;
 }
 
+function ai_normalize_document_title($html) {
+    if (!is_string($html) || (!is_front_page() && !is_home())) {
+        return $html;
+    }
+
+    $title = esc_html(ai_get_home_document_title());
+    $tag = '<title>' . $title . '</title>';
+
+    if (preg_match('/<title>.*?<\\/title>/is', $html)) {
+        return preg_replace('/<title>.*?<\\/title>/is', $tag, $html, 1) ?? $html;
+    }
+
+    return preg_replace('/<\\/head>/i', $tag . "\n</head>", $html, 1) ?? $html;
+}
+
 function ai_normalize_post_content_structure($content) {
     if (!is_string($content) || $content === '') {
         return $content;
@@ -1001,7 +1045,8 @@ function ai_normalize_post_content_structure($content) {
 }
 
 add_filter('wpfc_buffer_callback_filter', function($buffer) {
-    return ai_dedupe_canonical_tags($buffer);
+    $buffer = ai_dedupe_canonical_tags($buffer);
+    return ai_normalize_document_title($buffer);
 }, 10, 1);
 
 add_filter('the_content', 'ai_normalize_post_content_structure', 1);
@@ -1014,7 +1059,10 @@ add_action('template_redirect', function() {
         return;
     }
 
-    ob_start('ai_dedupe_canonical_tags');
+    ob_start(function($buffer) {
+        $buffer = ai_dedupe_canonical_tags($buffer);
+        return ai_normalize_document_title($buffer);
+    });
 }, 0);
 
 add_action('wp_head', function() {
