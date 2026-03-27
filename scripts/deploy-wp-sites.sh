@@ -869,20 +869,88 @@ function ai_get_home_document_title() {
     return substr($title, 0, 60);
 }
 
-add_filter('pre_get_document_title', function($title) {
+function ai_trim_text_for_head($text, $limit) {
+    $value = trim(preg_replace('/\s+/u', ' ', wp_strip_all_tags((string) $text)));
+    if ($value === '') {
+        return '';
+    }
+
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+        if (mb_strlen($value) <= $limit) {
+            return $value;
+        }
+
+        $trimmed = mb_substr($value, 0, $limit);
+        $trimmed = preg_replace('/\s+\S*$/u', '', $trimmed) ?: $trimmed;
+        return trim($trimmed);
+    }
+
+    if (strlen($value) <= $limit) {
+        return $value;
+    }
+
+    $trimmed = substr($value, 0, $limit);
+    $trimmed = preg_replace('/\s+\S*$/', '', $trimmed) ?: $trimmed;
+    return trim($trimmed);
+}
+
+function ai_get_singular_document_title() {
+    if (!is_singular('post')) {
+        return '';
+    }
+
+    $title = trim((string) get_post_meta(get_the_ID(), '_yoast_wpseo_title', true));
+    if ($title === '') {
+        $title = trim((string) get_the_title());
+    }
+
+    return ai_trim_text_for_head($title, 60);
+}
+
+function ai_get_document_title_for_current_request() {
     if (is_front_page() || is_home()) {
         return ai_get_home_document_title();
+    }
+
+    if (is_singular('post')) {
+        return ai_get_singular_document_title();
+    }
+
+    return '';
+}
+
+function ai_get_singular_meta_description() {
+    if (!is_singular('post')) {
+        return '';
+    }
+
+    $description = trim((string) get_post_meta(get_the_ID(), '_yoast_wpseo_metadesc', true));
+    if ($description === '') {
+        $description = trim((string) get_the_excerpt());
+    }
+    if ($description === '') {
+        $description = wp_trim_words(wp_strip_all_tags((string) get_post_field('post_content', get_the_ID())), 32, '...');
+    }
+
+    return ai_trim_text_for_head($description, 155);
+}
+
+add_filter('pre_get_document_title', function($title) {
+    $normalized = ai_get_document_title_for_current_request();
+    if ($normalized !== '') {
+        return $normalized;
     }
 
     return $title;
 }, PHP_INT_MAX);
 
 add_filter('document_title_parts', function($parts) {
-    if (!is_front_page() && !is_home()) {
-        return $parts;
+    $normalized = ai_get_document_title_for_current_request();
+    if ($normalized !== '') {
+        return ['title' => $normalized];
     }
-
-    return ['title' => ai_get_home_document_title()];
+    
+    return $parts;
 }, PHP_INT_MAX);
 
 function ai_get_canonical_url() {
@@ -1008,15 +1076,49 @@ function ai_dedupe_canonical_tags($html) {
 }
 
 function ai_normalize_document_title($html) {
-    if (!is_string($html) || (!is_front_page() && !is_home())) {
+    if (!is_string($html)) {
         return $html;
     }
 
-    $title = esc_html(ai_get_home_document_title());
+    $normalized = ai_get_document_title_for_current_request();
+    if ($normalized === '') {
+        return $html;
+    }
+
+    $title = esc_html($normalized);
     $tag = '<title>' . $title . '</title>';
 
     if (preg_match('/<title>.*?<\\/title>/is', $html)) {
         return preg_replace('/<title>.*?<\\/title>/is', $tag, $html, 1) ?? $html;
+    }
+
+    return preg_replace('/<\\/head>/i', $tag . "\n</head>", $html, 1) ?? $html;
+}
+
+function ai_normalize_meta_description_tag($html) {
+    if (!is_string($html)) {
+        return $html;
+    }
+
+    $description = '';
+    if (is_front_page() || is_home()) {
+        $description = trim((string) get_bloginfo('description'));
+        if ($description === '') {
+            $description = trim((string) get_option('blogdescription', ''));
+        }
+        $description = ai_trim_text_for_head($description, 155);
+    } elseif (is_singular('post')) {
+        $description = ai_get_singular_meta_description();
+    }
+
+    if ($description === '') {
+        return $html;
+    }
+
+    $tag = '<meta name="description" content="' . esc_attr($description) . '" />';
+
+    if (preg_match('/<meta[^>]+name=["\\\']description["\\\'][^>]*>/i', $html)) {
+        return preg_replace('/<meta[^>]+name=["\\\']description["\\\'][^>]*>/i', $tag, $html, 1) ?? $html;
     }
 
     return preg_replace('/<\\/head>/i', $tag . "\n</head>", $html, 1) ?? $html;
@@ -1036,7 +1138,8 @@ function ai_normalize_post_content_structure($content) {
 
 add_filter('wpfc_buffer_callback_filter', function($buffer) {
     $buffer = ai_dedupe_canonical_tags($buffer);
-    return ai_normalize_document_title($buffer);
+    $buffer = ai_normalize_document_title($buffer);
+    return ai_normalize_meta_description_tag($buffer);
 }, 10, 1);
 
 add_filter('the_content', 'ai_normalize_post_content_structure', 1);
@@ -1051,9 +1154,34 @@ add_action('template_redirect', function() {
 
     ob_start(function($buffer) {
         $buffer = ai_dedupe_canonical_tags($buffer);
-        return ai_normalize_document_title($buffer);
+        $buffer = ai_normalize_document_title($buffer);
+        return ai_normalize_meta_description_tag($buffer);
     });
 }, 0);
+
+add_filter('wpseo_title', function($title) {
+    if (is_singular('post')) {
+        return ai_get_singular_document_title();
+    }
+
+    if (is_front_page() || is_home()) {
+        return ai_get_home_document_title();
+    }
+
+    return $title;
+}, PHP_INT_MAX);
+
+add_filter('wpseo_metadesc', function($description) {
+    if (is_singular('post')) {
+        return ai_get_singular_meta_description();
+    }
+
+    if (is_front_page() || is_home()) {
+        return ai_trim_text_for_head((string) $description, 155);
+    }
+
+    return $description;
+}, PHP_INT_MAX);
 
 add_action('wp_head', function() {
     $canonical = ai_get_canonical_url();

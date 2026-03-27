@@ -137,6 +137,27 @@ function sanitizeTitleCopy(text: string): string {
   return sanitized.trim();
 }
 
+function normalizeLength(text: string, maxLength: number): string {
+  const value = (text || "").replace(/\s+/g, " ").trim();
+  if (!value) return "";
+
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return value.slice(0, maxLength).replace(/\s+[^\s]*$/, "").trim();
+}
+
+function normalizeMetaTitle(text: string): string {
+  const cleaned = sanitizeTitleCopy(sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(text)));
+  return normalizeLength(cleaned, 60);
+}
+
+function normalizeMetaDescription(text: string): string {
+  const cleaned = sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(text));
+  return normalizeLength(cleaned, 155);
+}
+
 export function sanitizeInternalReviewRefsInHtml(html: string): string {
   const $ = cheerio.load(sanitizeInternalReviewRefs(html || ""), null, false);
 
@@ -205,10 +226,8 @@ export function sanitizeGeneratedArticle<T extends GeneratedArticleLike>(article
     title: sanitizeTitleCopy(
       sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.title))
     ),
-    metaTitle: sanitizeTitleCopy(
-      sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.metaTitle))
-    ),
-    metaDescription: sanitizeMetaReviewPhrases(sanitizeInternalReviewRefs(article.metaDescription)),
+    metaTitle: normalizeMetaTitle(article.metaTitle || article.title),
+    metaDescription: normalizeMetaDescription(article.metaDescription || article.excerpt),
     htmlContent: normalizeHealthFoodStructureInHtml(
       sanitizeInternalReviewRefsInHtml(article.htmlContent)
     ),
