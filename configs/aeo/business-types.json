@@ -1,0 +1,79 @@
+{
+  "restaurant": {
+    "persona": "로컬 맛집 AEO 콘텐츠 전문 에디터",
+    "schemaType": "Restaurant",
+    "foodType": "음식",
+    "sectionTitles": {
+      "highlight": "{{LOCATION_SHORT}}에서 {{FOOD_TYPE}} 찾을 때 {{BUSINESS_NAME}}이 눈에 들어오는 이유",
+      "atmosphere": "공간과 분위기",
+      "menu": "대표 메뉴와 구성",
+      "visitInfo": "이용할 때 같이 볼 포인트"
+    }
+  },
+  "cafe": {
+    "persona": "로컬 카페·디저트 AEO 콘텐츠 전문 에디터",
+    "schemaType": "CafeOrCoffeeShop",
+    "foodType": "카페",
+    "sectionTitles": {
+      "highlight": "{{LOCATION_SHORT}}에서 카페 찾을 때 {{BUSINESS_NAME}}이 눈에 들어오는 이유",
+      "atmosphere": "공간과 분위기",
+      "menu": "시그니처 음료와 디저트",
+      "visitInfo": "이용할 때 같이 볼 포인트"
+    }
+  },
+  "dermatology": {
+    "persona": "로컬 의료·뷰티 AEO 콘텐츠 전문 에디터",
+    "schemaType": "MedicalBusiness",
+    "foodType": "피부 시술",
+    "sectionTitles": {
+      "highlight": "{{LOCATION_SHORT}}에서 피부과 찾을 때 {{BUSINESS_NAME}}이 눈에 들어오는 이유",
+      "atmosphere": "시설과 진료 환경",
+      "menu": "주요 시술과 진료 항목",
+      "visitInfo": "진료 전 확인할 사항"
+    }
+  },
+  "beauty_salon": {
+    "persona": "로컬 뷰티·헤어 AEO 콘텐츠 전문 에디터",
+    "schemaType": "BeautySalon",
+    "foodType": "헤어/네일",
+    "sectionTitles": {
+      "highlight": "{{LOCATION_SHORT}}에서 미용실 찾을 때 {{BUSINESS_NAME}}이 눈에 들어오는 이유",
+      "atmosphere": "매장 분위기와 시설",
+      "menu": "주요 시술 메뉴와 가격",
+      "visitInfo": "방문 전 확인할 사항"
+    }
+  },
+  "academy": {
+    "persona": "로컬 교육·학원 AEO 콘텐츠 전문 에디터",
+    "schemaType": "EducationalOrganization",
+    "foodType": "교육",
+    "sectionTitles": {
+      "highlight": "{{LOCATION_SHORT}}에서 학원 찾을 때 {{BUSINESS_NAME}}이 눈에 들어오는 이유",
+      "atmosphere": "학습 환경과 시설",
+      "menu": "주요 프로그램과 커리큘럼",
+      "visitInfo": "등록 전 확인할 사항"
+    }
+  },
+  "fitness": {
+    "persona": "로컬 운동·헬스 AEO 콘텐츠 전문 에디터",
+    "schemaType": "SportsActivityLocation",
+    "foodType": "피트니스",
+    "sectionTitles": {
+      "highlight": "{{LOCATION_SHORT}}에서 헬스장 찾을 때 {{BUSINESS_NAME}}이 눈에 들어오는 이유",
+      "atmosphere": "시설과 운동 환경",
+      "menu": "주요 프로그램과 이용 요금",
+      "visitInfo": "등록 전 확인할 사항"
+    }
+  },
+  "dental": {
+    "persona": "로컬 의료·치과 AEO 콘텐츠 전문 에디터",
+    "schemaType": "Dentist",
+    "foodType": "치과",
+    "sectionTitles": {
+      "highlight": "{{LOCATION_SHORT}}에서 치과 찾을 때 {{BUSINESS_NAME}}이 눈에 들어오는 이유",
+      "atmosphere": "시설과 진료 환경",
+      "menu": "주요 진료 항목과 비용",
+      "visitInfo": "진료 전 확인할 사항"
+    }
+  }
+}

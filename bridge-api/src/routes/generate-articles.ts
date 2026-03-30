@@ -1,4 +1,7 @@
 import * as cheerio from "cheerio";
+import * as fs from "fs";
+import * as path from "path";
+import { fileURLToPath } from "url";
 import type { FastifyInstance } from "fastify";
 import { setupSSE } from "../utils/sse.js";
 import { sanitizeGeneratedArticle } from "../lib/article-sanitizer.js";
@@ -81,6 +84,38 @@ type ReaderLens = {
   label: string;
   instruction: string;
   narrativeAngle: string;
+};
+
+// ── AEO Types ───────────────────────────────────────────────────────────────
+
+type AeoBusinessType = "restaurant" | "cafe" | "dermatology" | "beauty_salon" | "academy" | "fitness" | "dental";
+
+type AeoConfig = {
+  businessType: AeoBusinessType;
+  businessName: string;
+  mainKeyword: string;
+  subKeywords?: string;
+  locationShort: string;
+  broaderArea: string;
+  address?: string;
+  phone?: string;
+  hours?: string;
+  reservations?: boolean;
+  menuItems?: string;
+  visitPurposes?: string;
+  additionalInfo?: string;
+};
+
+type AeoBusinessTypeMapping = {
+  persona: string;
+  schemaType: string;
+  foodType: string;
+  sectionTitles: {
+    highlight: string;
+    atmosphere: string;
+    menu: string;
+    visitInfo: string;
+  };
 };
 
 const DEFAULT_PERSONA: SitePersona = {
@@ -774,6 +809,304 @@ function buildPlaceReviewPromptSection(reviews: ProductReview[], articleVariatio
   return section;
 }
 
+// ── AEO Helpers ─────────────────────────────────────────────────────────────
+
+const __filename_aeo = fileURLToPath(import.meta.url);
+const __dirname_aeo = path.dirname(__filename_aeo);
+
+let aeoBusinessTypesCache: Record<string, AeoBusinessTypeMapping> | null = null;
+
+function loadAeoBusinessTypes(): Record<string, AeoBusinessTypeMapping> {
+  if (aeoBusinessTypesCache) return aeoBusinessTypesCache;
+  const configPath = path.resolve(__dirname_aeo, "../../../configs/aeo/business-types.json");
+  aeoBusinessTypesCache = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  return aeoBusinessTypesCache!;
+}
+
+function parseKoreanAddress(address: string): { city: string; region: string } {
+  const parts = address.trim().split(/\s+/);
+  // 한국 주소: "서울 강남구 선릉로152길 18" or "서울특별시 강남구 ..."
+  const region = parts[0] || "";
+  const city = parts[1] || "";
+  return { city, region };
+}
+
+function buildMenuItemsJson(menuStr: string): string {
+  if (!menuStr?.trim()) return "[]";
+  const items = menuStr.split("/").map((item) => item.trim()).filter(Boolean);
+  const jsonItems = items.map((item) => {
+    const match = item.match(/^(.+?)\s+([\d,]+)원?$/);
+    if (match) {
+      return `{"@type":"MenuItem","name":"${match[1].trim()}","offers":{"@type":"Offer","price":"${match[2].replace(/,/g, "")}","priceCurrency":"KRW"}}`;
+    }
+    return `{"@type":"MenuItem","name":"${item}"}`;
+  });
+  return `[${jsonItems.join(",")}]`;
+}
+
+function resolveAeoSectionTitle(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] || "");
+}
+
+function autoEnhanceAeoPrompt(contentPrompt: string): string {
+  if (!contentPrompt.trim()) return "";
+  const aeoMarkers = ["패시지", "JSON-LD", "구조화", "엔티티", "AEO", "스키마", "FAQPage"];
+  const hasAeoAwareness = aeoMarkers.some((m) => contentPrompt.includes(m));
+  if (hasAeoAwareness) return contentPrompt;
+  return `${contentPrompt}\n\n---\n## AEO 자동 보강 규칙 (시스템 추가):\n- 각 H2 섹션의 처음 2-3문장은 독립적인 완결 답변으로 작성\n- 첫 문단에 사업장명 + 위치 + 업종 엔티티 선언\n- H2 중 최소 1개는 대화형 질문 형태로 작성\n- 글 하단에 JSON-LD 구조화 데이터 포함\n- FAQ 섹션은 FAQPage 마이크로데이터로 마크업`;
+}
+
+function buildAeoPrompt(
+  aeoConfig: AeoConfig,
+  persona: SitePersona,
+  product: ScrapedProduct,
+  reviewsSection: string,
+  promptBlock: string,
+  variationHint: string,
+  placeHasReviewImages: boolean,
+): string {
+  const businessTypes = loadAeoBusinessTypes();
+  const mapping = businessTypes[aeoConfig.businessType] || businessTypes["restaurant"];
+  const subKeyword1 = aeoConfig.subKeywords?.split(",")[0]?.trim() || "";
+  const { city, region } = aeoConfig.address ? parseKoreanAddress(aeoConfig.address) : { city: "", region: "" };
+
+  const titleVars: Record<string, string> = {
+    LOCATION_SHORT: aeoConfig.locationShort,
+    FOOD_TYPE: mapping.foodType,
+    BUSINESS_NAME: aeoConfig.businessName,
+  };
+
+  const sectionHighlight = resolveAeoSectionTitle(mapping.sectionTitles.highlight, titleVars);
+  const sectionAtmosphere = mapping.sectionTitles.atmosphere;
+  const sectionMenu = mapping.sectionTitles.menu;
+  const sectionVisitInfo = mapping.sectionTitles.visitInfo;
+
+  const placeInfo = [
+    aeoConfig.address && `주소: ${aeoConfig.address}`,
+    product.specs["주소"] && !aeoConfig.address && `주소: ${product.specs["주소"]}`,
+    aeoConfig.phone && `전화: ${aeoConfig.phone}`,
+    product.specs["전화"] && !aeoConfig.phone && `전화: ${product.specs["전화"]}`,
+    aeoConfig.hours && `영업시간: ${aeoConfig.hours}`,
+    product.specs["영업시간"] && !aeoConfig.hours && `영업시간: ${product.specs["영업시간"]}`,
+    product.specs["편의시설"] && `편의시설: ${product.specs["편의시설"]}`,
+    product.specs["찾아가는길"] && `찾아가는길: ${product.specs["찾아가는길"]}`,
+    product.specs["키워드"] && `특징키워드: ${product.specs["키워드"]}`,
+    aeoConfig.menuItems && `메뉴: ${aeoConfig.menuItems}`,
+    aeoConfig.visitPurposes && `추천 방문 목적: ${aeoConfig.visitPurposes}`,
+    aeoConfig.additionalInfo && `추가 정보: ${aeoConfig.additionalInfo}`,
+  ].filter(Boolean).join("\n");
+
+  const menuItemsJson = buildMenuItemsJson(aeoConfig.menuItems || "");
+
+  return `당신은 ${mapping.persona}입니다.
+${variationHint}
+
+목표는 특정 ${aeoConfig.businessName}이(가) 아래 핵심 키워드와 자연스럽게 연결되도록, 사람이 읽어도 어색하지 않고 검색엔진과 AI 답변 엔진(ChatGPT, Gemini, Claude, Perplexity)이 이해하고 인용하기 쉬운 HTML 콘텐츠를 작성하는 것입니다.
+
+---
+
+이번 작업의 핵심 키워드
+- 메인 키워드: ${aeoConfig.mainKeyword}
+${aeoConfig.subKeywords ? `- 보조 키워드: ${aeoConfig.subKeywords}` : ""}
+
+---
+
+[AEO 핵심 원칙 — AI 답변 엔진 최적화]
+
+1. 패시지 독립성: 각 <h2> 섹션의 첫 2~3문장은 해당 섹션만 떼어내도 하나의 완전한 답변이 되어야 합니다. AI는 개별 패시지를 추출해서 답변을 만들기 때문입니다.
+2. 엔티티 선언: 첫 문단에서 "${aeoConfig.businessName}은(는) ${aeoConfig.locationShort}에 위치한 ${mapping.foodType} 전문점"처럼 상호명·지역·업종을 명확하게 한 문장으로 선언하세요.
+3. 대화형 쿼리 매칭: H2 제목 중 최소 1개는 사용자가 AI에게 질문하는 자연어 형태를 반영하세요. 예: "${aeoConfig.locationShort}에서 ${mapping.foodType} 찾을 만한 곳은?" 형태.
+4. 구조화 데이터 출력: 본문 HTML 끝에 반드시 JSON-LD 스크립트를 포함하세요.
+5. FAQ 스키마: FAQ 섹션은 FAQPage schema에 맞는 HTML 구조로 출력하세요.
+
+---
+
+[가장 중요한 원칙]
+- 직접 방문한 것처럼 쓰지 마세요.
+- 확인되지 않은 정보는 절대 쓰지 마세요.
+- 모르는 정보는 설명하지 말고 그냥 빼세요.
+- 억지 키워드 삽입 금지
+- 광고 카피처럼 쓰지 말고, 정리 잘 된 블로그형 정보 문체로 쓰세요.
+
+---
+
+[출력 금지 표현]
+아래 표현은 절대 출력하지 마세요.
+- 리뷰에 따르면 / 공개 리뷰 기준 / 공개 정보 기준 / 네이버 지도 기준
+- 정보 없음 / 공개 정보 없음 / 확인 필요
+- 추정 / 예상 / 가능성 / 언급된다 / 보인다 / 알려져 있다
+- 후기상 / 리뷰상
+- 직접 방문했다 / 다녀왔다 / 먹어봤다
+- 친구와 갔다 / 가족과 갔다 / 외국인 친구와 갔다
+- 만족도가 높다 / 자리매김하고 있다 / 발길을 이끈다
+- 특별한 경험 / 역대급 / 무조건 / 인생맛집 / 꼭 가야 한다 / 최고
+
+---
+
+[정보 사용 규칙]
+1. 입력값에 있는 정보만 사용하세요.
+2. 입력값에 없는 사실은 절대 만들어 쓰지 마세요.
+3. 가격 정보가 정확하지 않으면 가격 자체를 언급하지 마세요.
+4. 주차, 발렛, 룸, 콜키지, 외국인 응대 정보가 명확하지 않으면 해당 항목은 통째로 빼세요.
+5. FAQ도 확인된 사실로만 답변 가능한 것만 넣으세요.
+6. 답변할 수 없는 질문은 만들지 마세요.
+7. 하나의 문장에 같은 키워드를 두 번 이상 넣지 마세요.
+8. 메인 키워드는 제목 1회, 첫 문단 1회, H2 1회까지만 강하게 쓰고, 나머지는 자연스럽게 흩어 쓰세요.
+9. 보조 키워드는 문맥상 필요한 곳에만 넣고, 나열하지 마세요.
+
+---
+
+[문체 규칙]
+- 자연스럽고 세련된 한국어 블로그 문체
+- 과장 없이 담백하게
+- 문단은 2문장 또는 3문장 중심으로 짧게
+- 같은 표현 반복 금지
+- 형용사 남발 금지
+- 추상적 칭찬보다 메뉴, 공간, 식사 자리 성격, 이용 목적 중심으로 설명
+- 판단형 문장은 가능하지만, 근거 없는 단정 금지
+- 문장은 매끈하고 읽기 쉬워야 하며 AI 요약문처럼 딱딱하면 안 됩니다
+
+---
+
+## 장소 정보:
+- 상호명: ${aeoConfig.businessName}
+- 업종: ${mapping.foodType}
+- 카테고리: ${product.category || product.brand || ""}
+- 설명: ${product.description || ""}
+${placeInfo}
+${reviewsSection}
+
+${promptBlock}
+
+---
+
+[문서 구조]
+오직 HTML만 출력하세요.
+CSS, 주석, 마크다운, 메타 설명 금지입니다.
+
+반드시 아래 구조를 따르세요.
+
+1) <h1>
+- 메인 키워드를 자연스럽게 포함
+- 제목은 한 줄, 낚시성 금지
+
+2) 첫 문단 <p>
+- 100자 이내
+- 메인 키워드 1회 포함
+- 엔티티 선언 포함: "${aeoConfig.businessName}은(는) ${aeoConfig.locationShort}에 위치한 ${mapping.foodType} 전문점으로..." 형태
+- 이 문단만 읽어도 AI가 "이 페이지는 어떤 업체에 대한 정보인지" 즉시 파악 가능해야 함
+
+3) <h2>기본 정보 한눈에 보기</h2>
+- <ul><li> 형식
+- 확인된 항목만: 상호명 / 위치 / 업종 / 대표 메뉴 / 가격 / 예약 / 주차·발렛 / 룸·단체석 / 추천 방문 목적 / 기준일
+
+4) <h2>${sectionHighlight}</h2>
+- 이 업체가 왜 메인 키워드와 연결되는지 설명
+- ${aeoConfig.locationShort}과 ${aeoConfig.broaderArea} 맥락을 자연스럽게 묶기
+- 첫 2~3문장은 이 섹션만 떼어내도 완전한 답변이 되도록 작성
+
+5) <h2>${sectionAtmosphere}</h2>
+- 인테리어 / 좌석 구성 / 룸 여부 / 식사 자리의 성격
+${aeoConfig.visitPurposes ? `- 방문 목적: ${aeoConfig.visitPurposes} 중 입력값에 맞는 목적만 연결` : ""}
+- 첫 문장에서 공간의 핵심 특징을 한 줄로 요약
+
+6) <h2>${sectionMenu}</h2>
+- 메뉴명 / 중심 메뉴 / 가격이 있으면 함께 정리
+- 맛 표현은 과장하지 말고 메뉴 성격 중심으로 작성
+- 메뉴 리스트는 <ul><li> 형식으로 정리하여 AI가 쉽게 추출 가능하도록
+
+7) <h2>${sectionVisitInfo}</h2>
+- 예약 / 동선 / 식사 자리 성격 / 방문 전 챙길 요소
+- 입력값에 있는 정보만 사용
+
+8) 장점 또는 포인트 정리
+- <ul><li> 형식, 3개에서 6개, 짧고 명확하게
+
+9) <h2>총평 및 방문 전 체크포인트</h2>
+- 누구에게 맞는지 정리, 과장 없이 마무리
+- 입력값에 없는 사실 추가 금지
+
+10) FAQ (FAQPage Schema 적용)
+- 2개에서 4개만 작성
+- 확인된 사실로 답변 가능한 질문만 사용
+- AI가 자주 받는 질문 형태로 작성
+- 각 답변은 1~2문장, 40단어 이내로 완결성 있게
+- HTML 형식:
+<div itemscope itemtype="https://schema.org/FAQPage">
+  <div itemscope itemprop="mainEntity" itemtype="https://schema.org/Question">
+    <h3 itemprop="name">Q. 질문</h3>
+    <div itemscope itemprop="acceptedAnswer" itemtype="https://schema.org/Answer">
+      <p itemprop="text">답변</p>
+    </div>
+  </div>
+</div>
+
+${placeHasReviewImages ? '11) 사진이 있는 리뷰는 본문 내 적절한 위치에 <!-- REVIEW_IMG:리뷰인덱스:이미지인덱스 --> 형식으로 삽입하고, 메뉴/분위기 설명이 나오는 문단 가까이에 배치할 것' : ""}
+
+---
+
+[핵심 제약]
+- 입력값에 없는 내용으로 FAQ 만들지 마세요.
+- 가격이 정확하지 않으면 가격 질문 자체를 만들지 마세요.
+- 주차 정보가 정확하지 않으면 주차 질문 자체를 만들지 마세요.
+- 룸 정보가 확실하지 않으면 룸 질문 자체를 만들지 마세요.
+- 콜키지가 확실하지 않으면 콜키지 질문 자체를 만들지 마세요.
+- 외국인 응대 정보가 없으면 관련 문장 자체를 만들지 마세요.
+- JSON-LD에서도 입력값에 없는 필드는 해당 키를 통째로 생략하세요.
+
+---
+
+[중복 방지]
+- 같은 업체로 여러 글을 만들더라도 이번 글은 "${aeoConfig.mainKeyword}" 중심으로 쓰세요.
+${subKeyword1 ? `- "${subKeyword1}"은 보조 연결만 하세요.` : ""}
+- 문단 첫 문장 패턴을 반복하지 마세요.
+- "고급스럽다", "세련되다", "특별하다" 같은 형용사를 연속 반복하지 마세요.
+
+---
+
+[출력 전 자가 점검]
+출력 직전에 아래를 반드시 점검하세요.
+1. 금지 표현이 하나라도 들어갔는가
+2. 입력값에 없는 정보를 추가했는가
+3. 추정 문장이 들어갔는가
+4. 제목, 첫 문단, H2에 메인 키워드가 들어갔는가
+5. 키워드 삽입이 부자연스럽지 않은가
+6. FAQ가 확인된 정보만으로 구성되었는가
+7. 문장이 광고처럼 과장되지 않았는가
+8. 사람이 읽어도 어색하지 않은가
+9. 첫 문단에 엔티티 선언(상호명+지역+업종)이 포함되었는가
+10. 각 H2 섹션의 첫 2~3문장이 독립적으로 완전한 답변이 되는가
+11. FAQ가 FAQPage Schema 마크업으로 출력되었는가
+12. 메뉴 리스트가 구조화되어 AI가 추출 가능한가
+
+---
+
+JSON 형식으로 응답하세요:
+{
+  "title": "글 제목 (메인 키워드 포함, 60자 이내)",
+  "metaTitle": "메타 타이틀 (60자 이내)",
+  "metaDescription": "메타 설명 (155자 이내, 위치+특징+추천 포함)",
+  "slug": "business-name-keyword-slug",
+  "htmlContent": "<h1>...</h1><p>엔티티 선언 포함 첫 문단</p>...<div itemscope itemtype=\\"https://schema.org/FAQPage\\">...</div>",
+  "excerpt": "발췌문 (2-3문장)",
+  "category": "${aeoConfig.businessType === "restaurant" || aeoConfig.businessType === "cafe" ? "맛집리뷰" : "정보"}",
+  "tags": ["${aeoConfig.businessName}", "${aeoConfig.locationShort}", "${mapping.foodType}"],
+  "faq": [{"question": "질문?", "answer": "답변"}],
+  "jsonLd": {
+    "@context": "https://schema.org",
+    "@type": "${mapping.schemaType}",
+    "name": "${aeoConfig.businessName}",
+    ${aeoConfig.address ? `"address": {"@type": "PostalAddress", "streetAddress": "${aeoConfig.address}", "addressLocality": "${city}", "addressRegion": "${region}", "addressCountry": "KR"},` : ""}
+    ${aeoConfig.phone ? `"telephone": "${aeoConfig.phone}",` : ""}
+    ${aeoConfig.reservations !== undefined ? `"acceptsReservations": "${aeoConfig.reservations}",` : ""}
+    ${aeoConfig.menuItems ? `"hasMenu": {"@type": "Menu", "hasMenuSection": {"@type": "MenuSection", "name": "대표 메뉴", "hasMenuItem": ${menuItemsJson}}},` : ""}
+    "description": "${aeoConfig.mainKeyword}"
+  }${placeHasReviewImages ? ',\n  "usedReviewImageIndices": [[리뷰인덱스, 이미지인덱스], ...]' : ""}
+}
+
+중요: jsonLd 필드는 입력값에 있는 정보만으로 구성하세요. 없는 필드는 통째로 생략하세요.`;
+}
+
 // ── Gemini call ──────────────────────────────────────────────────────────────
 
 async function generateForSite(
@@ -784,6 +1117,7 @@ async function generateForSite(
   reviewCollection?: ReviewCollection,
   articleVariation = 0,
   siteArticleIndex = 0,
+  aeoConfig?: AeoConfig,
 ): Promise<GeneratedArticle> {
   const persona = normalizePersona(site);
   const sourceTitle = product.title?.trim() || site.title || site.slug;
@@ -1035,6 +1369,98 @@ ${normalizedPrompt}
     articleVariation > 0
       ? `\n⚠️ 이번 배치의 ${articleVariation + 1}번째 글입니다. 같은 배치 다른 글들과 제목 형식·H2 구조·도입부·결론 문장이 겹치지 않아야 합니다.${siteArticleIndex > 0 ? ` 동일 사이트의 ${siteArticleIndex + 1}번째 글이므로 같은 사이트 기존 글과도 표현을 더 강하게 분리하세요.` : ""}`
       : "";
+
+  // ── AEO 로컬 비즈니스 전용 프롬프트 ────────────────────────────
+  if (aeoConfig) {
+    const reviewsSection = buildPlaceReviewPromptSection(product.reviews, articleVariation);
+    const placeHasReviewImages = product.reviews.some((review) => (review.images?.length || 0) > 0);
+
+    const enhancedPrompt = autoEnhanceAeoPrompt(normalizedPrompt);
+    const aeoPromptBlock = enhancedPrompt
+      ? `## 사용자 작성 프롬프트 (반드시 반영):\n${enhancedPrompt}\n\n## 프롬프트 반영 원칙:\n- 위 프롬프트의 핵심 질문, 원하는 톤, 구조를 최우선으로 반영할 것\n- 단, 리뷰/장소 데이터와 충돌하는 내용은 지어내지 말 것`
+      : "";
+
+    const aeoPrompt = buildAeoPrompt(
+      aeoConfig, persona, product, reviewsSection, aeoPromptBlock, variationHint, placeHasReviewImages
+    );
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: aeoPrompt }] }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0.9, maxOutputTokens: 8192 },
+        }),
+      }
+    );
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Gemini API 오류 (${res.status}): ${err.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error("AI 응답이 비어있습니다.");
+
+    let parsed;
+    try { parsed = JSON.parse(text); } catch {
+      const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (match) parsed = JSON.parse(match[1]); else throw new Error("AI 응답 JSON 파싱 실패");
+    }
+
+    const faqItems: FAQItem[] = (parsed.faq || []).map((f: { question: string; answer: string }) => ({
+      question: f.question, answer: f.answer,
+    }));
+
+    // JSON-LD를 htmlContent 끝에 append
+    let aeoHtmlContent = parsed.htmlContent || "";
+    if (parsed.jsonLd) {
+      const jsonLdStr = typeof parsed.jsonLd === "string" ? parsed.jsonLd : JSON.stringify(parsed.jsonLd, null, 2);
+      aeoHtmlContent += `\n<script type="application/ld+json">\n${jsonLdStr}\n</script>`;
+    }
+
+    // 리뷰 이미지 처리 (기존 맛집 로직 재사용)
+    const aeoPromptIndices = extractReviewImageIndicesFromHtml(aeoHtmlContent);
+    const aeoUsedReviewImageIndices = mergeReviewImageIndices(
+      normalizeReviewImageIndices(parsed.usedReviewImageIndices, product.reviews),
+      aeoPromptIndices
+    );
+    const finalAeoReviewImageIndices =
+      aeoUsedReviewImageIndices.length > 0
+        ? aeoUsedReviewImageIndices
+        : pickFallbackReviewImageIndices(
+            product.reviews,
+            pickReviewIndices(product.reviews.length, articleVariation, 20, 6),
+            3
+          );
+    const aeoReviewImages = buildReviewImagesFromIndices(product.reviews, finalAeoReviewImageIndices);
+    const finalAeoHtmlContent = injectReviewImagePlaceholders(aeoHtmlContent, finalAeoReviewImageIndices);
+
+    return sanitizeGeneratedArticle({
+      id: `${site.slug}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      siteSlug: site.slug,
+      siteDomain: site.domain,
+      personaName: persona.name,
+      sourceTitle,
+      targetQuestion: promptSummary,
+      title: parsed.title || product.title,
+      metaTitle: parsed.metaTitle || parsed.title || "",
+      metaDescription: parsed.metaDescription || "",
+      slug: parsed.slug || product.title.toLowerCase().replace(/\s+/g, "-").slice(0, 60),
+      htmlContent: finalAeoHtmlContent,
+      excerpt: parsed.excerpt || "",
+      category: parsed.category || "정보",
+      tags: parsed.tags || [],
+      faqSchema: faqItems,
+      wordCount: estimateVisibleWordCount(finalAeoHtmlContent),
+      status: "generated" as const,
+      reviewImages: aeoReviewImages,
+      usedReviewImageIndices: finalAeoReviewImageIndices,
+    });
+  }
 
   // ── 맛집/장소 전용 프롬프트 ────────────────────────────────────
   if (isRestaurant) {
@@ -1347,6 +1773,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
       offset = 0,
       limit,
       globalTotal,
+      aeoConfig,
     } = req.body as {
       product: ScrapedProduct;
       contentPrompt: string;
@@ -1355,6 +1782,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
       offset?: number;
       limit?: number;
       globalTotal?: number;
+      aeoConfig?: AeoConfig;
     };
 
     if (!product || !contentPrompt?.trim() || !siteConfigs?.length) {
@@ -1421,7 +1849,8 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
                   site,
                   reviewCollection,
                   diversityIndex,
-                  siteArticleIndex
+                  siteArticleIndex,
+                  aeoConfig
                 );
               } catch (err) {
                 lastErr = err instanceof Error ? err : new Error(String(err));

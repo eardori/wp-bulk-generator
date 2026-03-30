@@ -10,6 +10,7 @@ import type {
   GeneratedArticle,
   ReviewCollection,
   ProductReview,
+  AeoConfig,
 } from "./types";
 import ProductInputForm from "@/components/content/ProductInputForm";
 import ScrapedProductCard from "@/components/content/ScrapedProductCard";
@@ -33,15 +34,17 @@ export default function ContentPage() {
   const [reviewCollection, setReviewCollection] = useState<ReviewCollection | null>(null);
   const [reviewProgress, setReviewProgress] = useState({ page: 0, total: 5, message: "" });
   const [reviewDebugLog, setReviewDebugLog] = useState<string[]>([]); // 리뷰 수집 진단 로그
+  const [aeoConfig, setAeoConfig] = useState<AeoConfig | null>(null);
 
   // 이어서 생성을 위한 저장 상태
   const [savedSiteConfigs, setSavedSiteConfigs] = useState<{ site: SiteCredential; count: number }[]>([]);
   const [savedTotalArticles, setSavedTotalArticles] = useState(0);
 
   // Step 1 → 2: Scrape product
-  const handleScrape = async (url: string, prompt: string) => {
+  const handleScrape = async (url: string, prompt: string, aeo?: AeoConfig) => {
     setProductUrl(url);
     setContentPrompt(prompt);
+    setAeoConfig(aeo || null);
     setStep("scraping");
     setLog(["상품 페이지 스크랩 중..."]);
 
@@ -228,6 +231,7 @@ export default function ContentPage() {
               offset,
               limit: batchLimit,
               globalTotal: totalArticles,
+              ...(aeoConfig ? { aeoConfig } : {}),
             },
           });
           reader = result.reader;
@@ -386,6 +390,7 @@ export default function ContentPage() {
     setReviewProgress({ page: 0, total: 5, message: "" });
     setSavedSiteConfigs([]);
     setSavedTotalArticles(0);
+    setAeoConfig(null);
   };
 
   // Step indicator

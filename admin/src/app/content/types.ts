@@ -117,6 +117,28 @@ export type ContentArticleConfig = {
   enabled: boolean;
 };
 
+// ── AEO Types ───────────────────────────────────────────────────────────────
+
+export type AeoBusinessType = "restaurant" | "cafe" | "dermatology" | "beauty_salon" | "academy" | "fitness" | "dental";
+
+export type AeoConfig = {
+  businessType: AeoBusinessType;
+  businessName: string;
+  mainKeyword: string;
+  subKeywords?: string;
+  locationShort: string;
+  broaderArea: string;
+  address?: string;
+  phone?: string;
+  hours?: string;
+  reservations?: boolean;
+  menuItems?: string;
+  visitPurposes?: string;
+  additionalInfo?: string;
+};
+
+export type ContentMode = "product" | "aeo";
+
 export type ContentStep =
   | "input"
   | "scraping"
