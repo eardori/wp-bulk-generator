@@ -42,8 +42,12 @@ const JWT_ROUTE_PREFIXES: Record<string, string[]> = {
   "publish-articles": ["/publish-articles"],
   "repair-sites": ["/repair-sites"],
   schema: ["/schema"],
+  "schema-status": ["/schema/status"],
+  "schema-install": ["/schema/install"],
   "ai-test": ["/ai-test"],
+  "ai-test-run": ["/ai-test/run"],
   "score-checker": ["/score-checker"],
+  "score-checker-analyze": ["/score-checker/analyze"],
 };
 
 function isJwtRouteAllowed(pathname: string, route: string): boolean {
