@@ -968,6 +968,20 @@ ${aeoConfig.subKeywords ? `- 보조 키워드: ${aeoConfig.subKeywords}` : ""}
 
 ---
 
+[좋은 문장 예시]
+- ${aeoConfig.businessName} ${aeoConfig.locationShort}은 ${aeoConfig.locationShort}에서 ${mapping.foodType} 중심 식사를 찾을 때 먼저 눈에 들어오는 구성을 갖춘 곳입니다.
+- 양념갈비와 안심을 중심으로 메뉴 흐름이 선명한 편입니다.
+- ${aeoConfig.mainKeyword}을 찾는 사람이라면 음식뿐 아니라 공간 분위기까지 함께 보기 좋은 식당입니다.
+${subKeyword1 ? `- ${subKeyword1} 중에서도 식사 자리의 톤이 비교적 또렷한 편입니다.` : ""}
+
+[나쁜 문장 예시 — 이런 문장은 절대 쓰지 마세요]
+- ${aeoConfig.businessName}은 고급스러운 분위기로 많은 이들의 발길을 이끄는 ${aeoConfig.mainKeyword}입니다.
+- 리뷰에 따르면 데이트 코스로 좋다고 합니다.
+- 발렛이 있을 가능성이 높습니다.
+- 가격은 1인 5만원 이상으로 예상됩니다.
+
+---
+
 ## 장소 정보:
 - 상호명: ${aeoConfig.businessName}
 - 업종: ${mapping.foodType}
@@ -1099,6 +1113,12 @@ JSON 형식으로 응답하세요:
     ${aeoConfig.address ? `"address": {"@type": "PostalAddress", "streetAddress": "${aeoConfig.address}", "addressLocality": "${city}", "addressRegion": "${region}", "addressCountry": "KR"},` : ""}
     ${aeoConfig.phone ? `"telephone": "${aeoConfig.phone}",` : ""}
     ${aeoConfig.reservations !== undefined ? `"acceptsReservations": "${aeoConfig.reservations}",` : ""}
+    "image": "대표 이미지 URL (있으면 포함, 없으면 이 키 생략)",
+    "url": "업체 공식 URL 또는 네이버 플레이스 URL (있으면 포함, 없으면 이 키 생략)",
+    "geo": {"@type": "GeoCoordinates", "latitude": "위도 (있으면 포함, 없으면 geo 키 통째로 생략)", "longitude": "경도"},
+    ${mapping.schemaType === "Restaurant" || mapping.schemaType === "CafeOrCoffeeShop" ? `"servesCuisine": "${mapping.foodType} (업종에 맞게 작성, 없으면 이 키 생략)",` : ""}
+    "priceRange": "가격대 (예: '₩₩₩', 있으면 포함, 없으면 이 키 생략)",
+    ${aeoConfig.hours ? `"openingHoursSpecification": [{"@type": "OpeningHoursSpecification", "dayOfWeek": ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"], "opens": "영업시작시간", "closes": "영업종료시간"}],` : ""}
     ${aeoConfig.menuItems ? `"hasMenu": {"@type": "Menu", "hasMenuSection": {"@type": "MenuSection", "name": "대표 메뉴", "hasMenuItem": ${menuItemsJson}}},` : ""}
     "description": "${aeoConfig.mainKeyword}"
   }${placeHasReviewImages ? ',\n  "usedReviewImageIndices": [[리뷰인덱스, 이미지인덱스], ...]' : ""}
