@@ -15,6 +15,9 @@ import { backfillDashboardCacheRoutes } from "./routes/backfill-dashboard-cache.
 import { deployRoutes } from "./routes/deploy.js";
 import { ec2ProxyRoutes } from "./routes/ec2-proxy.js";
 import { repairSitesRoutes } from "./routes/repair-sites.js";
+import { schemaRoutes } from "./routes/schema.js";
+import { aiTestRoutes } from "./routes/ai-test.js";
+import { scoreCheckerRoutes } from "./routes/score-checker.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -90,6 +93,9 @@ await app.register(backfillDashboardCacheRoutes);
 await app.register(deployRoutes);
 await app.register(repairSitesRoutes);
 await app.register(ec2ProxyRoutes);
+await app.register(schemaRoutes);
+await app.register(aiTestRoutes);
+await app.register(scoreCheckerRoutes);
 
 // Graceful shutdown
 const shutdown = async () => {

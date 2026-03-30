@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \":*)",
+      "Bash(python -c \":*)",
+      "Bash(py --version)",
+      "Bash(pip --version)",
+      "Bash(node -e \":*)",
+      "Bash(npm remove:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(npx next:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx -p typescript tsc --noEmit)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(find 'C:/Users/hsong/OneDrive/바탕 화면/Dev/WP Generator' -type f \\\\\\(-name *.yml -o -name *.yaml -o -name *.json -o -name *.env* \\\\\\))",
+      "Bash(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no ubuntu@54.248.12.228 \"echo connected\")",
+      "Bash(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i \"/c/Users/hsong/OneDrive/바탕 화면/LightsailDefaultKey-ap-northeast-1.pem\" ubuntu@54.248.12.228 \"cat /home/ubuntu/wp-bulk-generator/bridge-api/.env | grep -i gemini\")",
+      "Bash(ssh -o ConnectTimeout=10 -i \"/c/Users/hsong/OneDrive/바탕 화면/LightsailDefaultKey-ap-northeast-1.pem\" ubuntu@54.248.12.228 \"cd /home/ubuntu/wp-bulk-generator/bridge-api && pm2 logs bridge-api --lines 50 --nostream 2>&1 | tail -60\")",
+      "Bash(ssh -o ConnectTimeout=10 -i \"/c/Users/hsong/OneDrive/바탕 화면/LightsailDefaultKey-ap-northeast-1.pem\" ubuntu@54.248.12.228 \"pm2 logs wp-bridge-api --lines 100 --nostream 2>/dev/null | tail -100\")",
+      "Bash(ssh -o ConnectTimeout=10 -i \"/c/Users/hsong/OneDrive/바탕 화면/LightsailDefaultKey-ap-northeast-1.pem\" ubuntu@54.248.12.228 \"cat /home/ubuntu/.pm2/logs/wp-bridge-api-error.log 2>/dev/null | tail -50\")"
+    ]
+  }
+}

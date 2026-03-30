@@ -34,3 +34,20 @@ body {
 .animate-progress {
   animation: progress 0.5s ease-out;
 }
+
+/* JSON Syntax Highlighting */
+.json-key { color: #c4b5fd; }
+.json-string { color: #6ee7b7; }
+.json-number { color: #fbbf24; }
+.json-boolean { color: #67e8f9; }
+
+/* Fade In Up */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.4s ease-out;
+}
+
