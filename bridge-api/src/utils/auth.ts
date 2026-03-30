@@ -41,6 +41,9 @@ const JWT_ROUTE_PREFIXES: Record<string, string[]> = {
   "seo-optimize": ["/seo-optimize"],
   "publish-articles": ["/publish-articles"],
   "repair-sites": ["/repair-sites"],
+  schema: ["/schema"],
+  "ai-test": ["/ai-test"],
+  "score-checker": ["/score-checker"],
 };
 
 function isJwtRouteAllowed(pathname: string, route: string): boolean {
