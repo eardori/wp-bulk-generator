@@ -1340,6 +1340,93 @@ add_action('transition_post_status', function($new_status, $old_status, $post) {
         ai_submit_indexnow_url($permalink);
     }
 }, 10, 3);
+
+// GEO: Author ProfilePage Schema (소개 페이지)
+add_action('wp_head', function() {
+    if (!is_page('소개') && !is_page('about')) return;
+    $site_name = get_bloginfo('name');
+    $home_url = home_url('/');
+    $author_page_url = get_permalink();
+    $description = trim((string) get_option('ai_persona_bio', ''));
+    $expertise = trim((string) get_option('ai_persona_expertise', ''));
+    $concern = trim((string) get_option('ai_persona_concern', ''));
+    $author_name = trim((string) get_option('ai_persona_name', $site_name));
+
+    $person = [
+        '@context' => 'https://schema.org',
+        '@type' => 'ProfilePage',
+        'mainEntity' => [
+            '@type' => 'Person',
+            '@id' => $home_url . '#author',
+            'name' => $author_name,
+            'url' => $author_page_url,
+        ],
+    ];
+    if ($expertise !== '') {
+        $person['mainEntity']['jobTitle'] = $expertise;
+        $person['mainEntity']['knowsAbout'] = $expertise;
+    }
+    if ($concern !== '') {
+        $person['mainEntity']['knowsAbout'] = $concern;
+    }
+    if ($description !== '') {
+        $person['mainEntity']['description'] = $description;
+    }
+    echo '<script type="application/ld+json">' . wp_json_encode($person, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>' . "\n";
+}, 2);
+
+// llms-full.txt static generation on post publish/update
+function ai_regenerate_llms_full_txt() {
+    $site_name = get_bloginfo('name');
+    $site_desc = get_bloginfo('description');
+    $home_url = home_url('/');
+    $author_name = trim((string) get_option('ai_persona_name', $site_name));
+
+    $output = "# {$site_name}\n\n";
+    $output .= "> {$site_desc}\n\n";
+    $output .= "## About\n";
+    $output .= "- Author: {$author_name}\n";
+    $output .= "- Site: {$home_url}\n\n";
+
+    $cats = get_categories(['hide_empty' => true]);
+    if (!empty($cats)) {
+        $output .= "## Categories\n";
+        foreach ($cats as $cat) {
+            $output .= "- [{$cat->name}](" . get_category_link($cat->term_id) . "): {$cat->count} articles\n";
+        }
+        $output .= "\n";
+    }
+
+    $posts = get_posts(['post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 200, 'orderby' => 'date', 'order' => 'DESC']);
+    if (!empty($posts)) {
+        $output .= "## Articles\n\n";
+        foreach ($posts as $p) {
+            $title = wp_strip_all_tags($p->post_title);
+            $url = get_permalink($p);
+            $date = get_the_date('Y-m-d', $p);
+            $excerpt = wp_strip_all_tags($p->post_excerpt ?: wp_trim_words($p->post_content, 40, '...'));
+            $output .= "### [{$title}]({$url})\n";
+            $output .= "- Date: {$date}\n";
+            $output .= "- Summary: {$excerpt}\n\n";
+        }
+    }
+
+    $path = ABSPATH . 'llms-full.txt';
+    @file_put_contents($path, $output);
+    @chmod($path, 0644);
+}
+
+add_action('transition_post_status', function($new_status, $old_status, $post) {
+    if (!$post instanceof WP_Post || $post->post_type !== 'post') return;
+    if ($new_status !== 'publish' && $old_status !== 'publish') return;
+    ai_regenerate_llms_full_txt();
+}, 20, 3);
+
+add_action('init', function() {
+    if (!file_exists(ABSPATH . 'llms-full.txt')) {
+        ai_regenerate_llms_full_txt();
+    }
+}, 99);
 SEOPHP
 }
 
@@ -1448,6 +1535,9 @@ for i in $(seq 0 $((SITE_COUNT - 1))); do
   if [ -n "$BF_TITLE" ]; then
     write_llms_txt "$DOMAIN" "$SITE_DIR" "$BF_TITLE" "$BF_TAGLINE" "$BF_PERSONA" "$BF_CATEGORIES"
   fi
+
+  # llms-full.txt 재생성 (MU-Plugin 함수 호출)
+  wp_try eval 'if (function_exists("ai_regenerate_llms_full_txt")) { ai_regenerate_llms_full_txt(); }' --path="$SITE_DIR" --allow-root 2>/dev/null || true
 
   if [ "$WP_LIGHT_MODE" != "1" ]; then
     wp_try rewrite flush --hard --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true

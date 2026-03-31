@@ -1330,6 +1330,94 @@ add_action('transition_post_status', function($new_status, $old_status, $post) {
         ai_submit_indexnow_url($permalink);
     }
 }, 10, 3);
+
+// GEO: Author ProfilePage Schema (소개 페이지)
+add_action('wp_head', function() {
+    if (!is_page('소개') && !is_page('about')) return;
+    $site_name = get_bloginfo('name');
+    $home_url = home_url('/');
+    $author_page_url = get_permalink();
+    $description = trim((string) get_option('ai_persona_bio', ''));
+    $expertise = trim((string) get_option('ai_persona_expertise', ''));
+    $concern = trim((string) get_option('ai_persona_concern', ''));
+    $author_name = trim((string) get_option('ai_persona_name', $site_name));
+
+    $person = [
+        '@context' => 'https://schema.org',
+        '@type' => 'ProfilePage',
+        'mainEntity' => [
+            '@type' => 'Person',
+            '@id' => $home_url . '#author',
+            'name' => $author_name,
+            'url' => $author_page_url,
+        ],
+    ];
+    if ($expertise !== '') {
+        $person['mainEntity']['jobTitle'] = $expertise;
+        $person['mainEntity']['knowsAbout'] = $expertise;
+    }
+    if ($concern !== '') {
+        $person['mainEntity']['knowsAbout'] = $concern;
+    }
+    if ($description !== '') {
+        $person['mainEntity']['description'] = $description;
+    }
+    echo '<script type="application/ld+json">' . wp_json_encode($person, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>' . "\n";
+}, 2);
+
+// llms-full.txt static generation on post publish/update
+function ai_regenerate_llms_full_txt() {
+    $site_name = get_bloginfo('name');
+    $site_desc = get_bloginfo('description');
+    $home_url = home_url('/');
+    $author_name = trim((string) get_option('ai_persona_name', $site_name));
+
+    $output = "# {$site_name}\n\n";
+    $output .= "> {$site_desc}\n\n";
+    $output .= "## About\n";
+    $output .= "- Author: {$author_name}\n";
+    $output .= "- Site: {$home_url}\n\n";
+
+    $cats = get_categories(['hide_empty' => true]);
+    if (!empty($cats)) {
+        $output .= "## Categories\n";
+        foreach ($cats as $cat) {
+            $output .= "- [{$cat->name}](" . get_category_link($cat->term_id) . "): {$cat->count} articles\n";
+        }
+        $output .= "\n";
+    }
+
+    $posts = get_posts(['post_type' => 'post', 'post_status' => 'publish', 'numberposts' => 200, 'orderby' => 'date', 'order' => 'DESC']);
+    if (!empty($posts)) {
+        $output .= "## Articles\n\n";
+        foreach ($posts as $p) {
+            $title = wp_strip_all_tags($p->post_title);
+            $url = get_permalink($p);
+            $date = get_the_date('Y-m-d', $p);
+            $excerpt = wp_strip_all_tags($p->post_excerpt ?: wp_trim_words($p->post_content, 40, '...'));
+            $output .= "### [{$title}]({$url})\n";
+            $output .= "- Date: {$date}\n";
+            $output .= "- Summary: {$excerpt}\n\n";
+        }
+    }
+
+    $path = ABSPATH . 'llms-full.txt';
+    @file_put_contents($path, $output);
+    @chmod($path, 0644);
+}
+
+add_action('transition_post_status', function($new_status, $old_status, $post) {
+    if (!$post instanceof WP_Post || $post->post_type !== 'post') return;
+    if ($new_status !== 'publish' && $old_status !== 'publish') return;
+    ai_regenerate_llms_full_txt();
+}, 20, 3);
+
+// Generate on first load if missing
+add_action('init', function() {
+    if (!file_exists(ABSPATH . 'llms-full.txt')) {
+        ai_regenerate_llms_full_txt();
+    }
+}, 99);
 SEOPHP
 }
 
@@ -1592,12 +1680,32 @@ footer, .wp-block-template-part:last-child {
 
   # ---- 7. 소개 페이지 생성 ----
   echo "  [7/7] 소개 페이지 생성..."
+  ABOUT_CONTENT="<div class=\"about-author\">"
+  ABOUT_CONTENT+="<h2>$PERSONA_NAME</h2>"
+  if [ -n "$PERSONA_EXPERTISE" ]; then
+    ABOUT_CONTENT+="<p class=\"author-title\">$PERSONA_EXPERTISE</p>"
+  fi
+  ABOUT_CONTENT+="<p>$PERSONA_BIO</p>"
+  if [ -n "$PERSONA_CONCERN" ]; then
+    ABOUT_CONTENT+="<p><strong>관심 분야:</strong> $PERSONA_CONCERN</p>"
+  fi
+  ABOUT_CONTENT+="</div>"
   wp post create \
     --post_type=page \
     --post_title="소개" \
-    --post_content="<p>안녕하세요! $PERSONA_NAME입니다.</p><p>$PERSONA_BIO</p>" \
+    --post_content="$ABOUT_CONTENT" \
     --post_status=publish \
     --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+
+  # 페르소나 정보를 WP 옵션에 저장 (MU-Plugin에서 사용)
+  wp_try option update ai_persona_name "$PERSONA_NAME" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  wp_try option update ai_persona_bio "$PERSONA_BIO" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  if [ -n "$PERSONA_EXPERTISE" ]; then
+    wp_try option update ai_persona_expertise "$PERSONA_EXPERTISE" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  fi
+  if [ -n "$PERSONA_CONCERN" ]; then
+    wp_try option update ai_persona_concern "$PERSONA_CONCERN" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null || true
+  fi
 
   finalize_site_setup "$SLUG" "$DOMAIN" "$SITE_DIR" || {
     SITE_LAST_ERROR="사이트 마무리 설정 실패"
@@ -1653,6 +1761,8 @@ for i in $(seq 0 $(($SITE_COUNT - 1))); do
   SIDEBAR=$(jq -r ".[$i].layout_preference.sidebar" "$CONFIG_FILE")
   PERSONA_NAME=$(jq -r ".[$i].persona.name" "$CONFIG_FILE")
   PERSONA_BIO=$(jq -r ".[$i].persona.bio" "$CONFIG_FILE")
+  PERSONA_EXPERTISE=$(jq -r ".[$i].persona.expertise // empty" "$CONFIG_FILE")
+  PERSONA_CONCERN=$(jq -r ".[$i].persona.concern // empty" "$CONFIG_FILE")
   SITE_URL="$(site_url_for_domain "$DOMAIN")"
 
   # 도메인 없으면 IP + 포트 또는 서브디렉토리

@@ -742,6 +742,223 @@ function build_business_schema($post, $content, $title, $excerpt) {
   return $schema;
 }
 
+function build_howto_schema($post, $content, $title) {
+  $plain_title = trim(wp_strip_all_tags($title));
+  $is_howto = (bool) preg_match('/(방법|가이드|하는\s*법|순서|따라\s*하기|step|tutorial|how\s*to)/iu', $plain_title);
+
+  $steps = array();
+
+  // Pattern 1: <ol><li> ordered lists (3+ items)
+  if (preg_match_all('/<ol[^>]*>([\s\S]*?)<\/ol>/i', $content, $ol_matches)) {
+    foreach ($ol_matches[1] as $ol_inner) {
+      if (preg_match_all('/<li[^>]*>(.*?)<\/li>/si', $ol_inner, $li_matches)) {
+        if (count($li_matches[1]) >= 3) {
+          foreach ($li_matches[1] as $idx => $li_text) {
+            $text = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($li_text)));
+            if (mb_strlen($text) > 5) {
+              $steps[] = array(
+                '@type' => 'HowToStep',
+                'position' => $idx + 1,
+                'text' => mb_substr($text, 0, 300),
+              );
+            }
+          }
+          if (count($steps) >= 3) break;
+        }
+      }
+    }
+  }
+
+  // Pattern 2: H2/H3 with step/단계 numbering
+  if (empty($steps)) {
+    if (preg_match_all('/<h[23][^>]*>(.*?(?:단계|step|STEP)\s*\d+.*?)<\/h[23]>\s*<p[^>]*>(.*?)<\/p>/si', $content, $step_matches, PREG_SET_ORDER)) {
+      foreach ($step_matches as $idx => $m) {
+        $step_name = trim(wp_strip_all_tags($m[1]));
+        $step_text = trim(wp_strip_all_tags($m[2]));
+        if ($step_name !== '' && mb_strlen($step_text) > 10) {
+          $steps[] = array(
+            '@type' => 'HowToStep',
+            'position' => $idx + 1,
+            'name' => mb_substr($step_name, 0, 100),
+            'text' => mb_substr($step_text, 0, 300),
+          );
+        }
+      }
+    }
+  }
+
+  if (count($steps) < 3 && !$is_howto) {
+    return null;
+  }
+  if (count($steps) < 2) {
+    return null;
+  }
+
+  $steps = array_slice($steps, 0, 15);
+
+  return array(
+    '@context' => 'https://schema.org',
+    '@type' => 'HowTo',
+    'name' => $plain_title,
+    'description' => mb_substr(trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($content))), 0, 200),
+    'step' => $steps,
+    'url' => get_permalink($post),
+  );
+}
+
+function build_product_review_schema($post, $content, $title) {
+  $plain_text = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($content)));
+  $plain_title = trim(wp_strip_all_tags($title));
+
+  // Detect review/product signals
+  $has_rating = (bool) preg_match('/(\d(?:\.\d)?)\s*(?:점|\/\s*5|\/\s*10|stars?)/iu', $plain_text);
+  $has_price = (bool) preg_match('/\d{1,3}(?:,\d{3})*\s*원/u', $plain_text);
+  $has_pros_cons = (bool) preg_match('/(장점|단점|pros|cons|좋은\s*점|아쉬운\s*점|단점|강점|약점)/iu', $plain_text);
+  $has_review_title = (bool) preg_match('/(후기|리뷰|review|비교|추천|평가|사용기|체험)/iu', $plain_title);
+
+  $signal_count = (int) $has_rating + (int) $has_price + (int) $has_pros_cons + (int) $has_review_title;
+  if ($signal_count < 2) {
+    return null;
+  }
+
+  // Extract product name from title
+  $product_name = $plain_title;
+  if (preg_match('/^(.+?)\s*(?:후기|리뷰|review|비교|추천|평가|사용기|체험|총정리|정리|가이드)/iu', $plain_title, $pn_match)) {
+    $product_name = trim($pn_match[1]);
+  }
+  if ($product_name === '') {
+    $product_name = $plain_title;
+  }
+
+  // Extract rating
+  $rating_value = '';
+  $best_rating = '5';
+  if (preg_match('/(\d(?:\.\d)?)\s*(?:점|\/\s*5|stars?)/iu', $plain_text, $rating_match)) {
+    $rating_value = $rating_match[1];
+    $best_rating = '5';
+  } elseif (preg_match('/(\d(?:\.\d)?)\s*\/\s*10/u', $plain_text, $rating_match)) {
+    $rating_value = $rating_match[1];
+    $best_rating = '10';
+  }
+
+  // Extract price
+  $price = '';
+  if (preg_match_all('/(\d{1,3}(?:,\d{3})*)\s*원/u', $plain_text, $price_matches)) {
+    $prices = array();
+    foreach ($price_matches[1] as $raw_price) {
+      $p = (int) str_replace(',', '', $raw_price);
+      if ($p > 0 && $p < 10000000) {
+        $prices[] = $p;
+      }
+    }
+    if (!empty($prices)) {
+      sort($prices);
+      $price = (string) $prices[0];
+    }
+  }
+
+  // Extract pros/cons
+  $pros = array();
+  $cons = array();
+  if (preg_match_all('/<li[^>]*>(.*?)<\/li>/si', $content, $li_matches)) {
+    $in_pros = false;
+    $in_cons = false;
+    foreach ($li_matches[1] as $li) {
+      $text = trim(wp_strip_all_tags($li));
+      if (preg_match('/^(장점|좋은\s*점|강점|pros)/iu', $text)) { $in_pros = true; $in_cons = false; continue; }
+      if (preg_match('/^(단점|아쉬운\s*점|약점|cons)/iu', $text)) { $in_cons = true; $in_pros = false; continue; }
+      if ($in_pros && mb_strlen($text) > 3) $pros[] = mb_substr($text, 0, 100);
+      if ($in_cons && mb_strlen($text) > 3) $cons[] = mb_substr($text, 0, 100);
+    }
+  }
+  // Also detect pros/cons in heading + list pattern
+  if (empty($pros) && preg_match('/<h[23][^>]*>[^<]*(?:장점|좋은\s*점|강점|pros)[^<]*<\/h[23]>\s*<[uo]l[^>]*>([\s\S]*?)<\/[uo]l>/iu', $content, $pros_match)) {
+    if (preg_match_all('/<li[^>]*>(.*?)<\/li>/si', $pros_match[1], $pros_li)) {
+      foreach ($pros_li[1] as $li) {
+        $text = trim(wp_strip_all_tags($li));
+        if (mb_strlen($text) > 3) $pros[] = mb_substr($text, 0, 100);
+      }
+    }
+  }
+  if (empty($cons) && preg_match('/<h[23][^>]*>[^<]*(?:단점|아쉬운\s*점|약점|cons)[^<]*<\/h[23]>\s*<[uo]l[^>]*>([\s\S]*?)<\/[uo]l>/iu', $content, $cons_match)) {
+    if (preg_match_all('/<li[^>]*>(.*?)<\/li>/si', $cons_match[1], $cons_li)) {
+      foreach ($cons_li[1] as $li) {
+        $text = trim(wp_strip_all_tags($li));
+        if (mb_strlen($text) > 3) $cons[] = mb_substr($text, 0, 100);
+      }
+    }
+  }
+
+  $image = get_the_post_thumbnail_url($post, 'large');
+  if (!$image && preg_match('/<img[^>]*src="([^"]+)"/i', $content, $img_match)) {
+    $image = $img_match[1];
+  }
+
+  // Build Product schema
+  $product = array(
+    '@context' => 'https://schema.org',
+    '@type' => 'Product',
+    'name' => $product_name,
+    'description' => mb_substr($plain_text, 0, 200),
+    'url' => get_permalink($post),
+  );
+
+  if ($image) {
+    $product['image'] = $image;
+  }
+
+  if ($price !== '') {
+    $product['offers'] = array(
+      '@type' => 'Offer',
+      'price' => $price,
+      'priceCurrency' => 'KRW',
+      'availability' => 'https://schema.org/InStock',
+    );
+  }
+
+  // Build Review schema embedded in Product
+  $review = array(
+    '@type' => 'Review',
+    'author' => array('@type' => 'Person', 'name' => get_bloginfo('name')),
+    'datePublished' => $post->post_date,
+    'reviewBody' => mb_substr($plain_text, 0, 300),
+  );
+
+  if ($rating_value !== '') {
+    $review['reviewRating'] = array(
+      '@type' => 'Rating',
+      'ratingValue' => $rating_value,
+      'bestRating' => $best_rating,
+    );
+  }
+
+  if (!empty($pros) || !empty($cons)) {
+    $review['positiveNotes'] = array('@type' => 'ItemList', 'itemListElement' => array());
+    foreach (array_slice($pros, 0, 5) as $idx => $pro) {
+      $review['positiveNotes']['itemListElement'][] = array(
+        '@type' => 'ListItem', 'position' => $idx + 1, 'name' => $pro,
+      );
+    }
+    if (empty($review['positiveNotes']['itemListElement'])) {
+      unset($review['positiveNotes']);
+    }
+
+    $review['negativeNotes'] = array('@type' => 'ItemList', 'itemListElement' => array());
+    foreach (array_slice($cons, 0, 5) as $idx => $con) {
+      $review['negativeNotes']['itemListElement'][] = array(
+        '@type' => 'ListItem', 'position' => $idx + 1, 'name' => $con,
+      );
+    }
+    if (empty($review['negativeNotes']['itemListElement'])) {
+      unset($review['negativeNotes']);
+    }
+  }
+
+  $product['review'] = $review;
+
+  return $product;
+}
+
 function build_schema_html($post, $content, $title, $excerpt, $persona_name, $site_title, $persona_expertise, $persona_concern, $persona_bio) {
   $author = array(
     '@type' => 'Person',
@@ -783,6 +1000,16 @@ function build_schema_html($post, $content, $title, $excerpt, $persona_name, $si
   $business_schema = build_business_schema($post, $content, $title, $excerpt);
   if (!empty($business_schema)) {
     $schema_html .= "\n" . '<script type="application/ld+json">' . wp_json_encode($business_schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>';
+  }
+
+  $howto_schema = build_howto_schema($post, $content, $title);
+  if (!empty($howto_schema)) {
+    $schema_html .= "\n" . '<script type="application/ld+json">' . wp_json_encode($howto_schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>';
+  }
+
+  $product_schema = build_product_review_schema($post, $content, $title);
+  if (!empty($product_schema)) {
+    $schema_html .= "\n" . '<script type="application/ld+json">' . wp_json_encode($product_schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>';
   }
 
   return array($schema_html, count($faq_items));
