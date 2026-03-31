@@ -23,12 +23,15 @@ export type ScoreResult = {
   businessName: string;
   websiteUrl: string;
   hasWebsite?: boolean;
+  crawlFailed?: boolean;
+  crawlError?: string;
   totalScore: number;
   grade: string;
   categories: CategoryResult[];
   summary: string;
   topPriorities: string[];
   scanDate: string;
+  discoveredSources?: string[];
 };
 
 interface ScoreCheckerResultsProps {
@@ -162,6 +165,36 @@ export default function ScoreCheckerResults({ data, onReset }: ScoreCheckerResul
             현재 웹사이트가 없어 구조화 데이터(30점)와 콘텐츠 품질(30점) 카테고리가 0점 처리되었습니다.
             WP Bulk Generator로 AEO 최적화 사이트를 제작하고 Schema를 설치하면 점수가 크게 향상됩니다.
           </p>
+        </div>
+      )}
+
+      {/* ── Crawl Failed Banner ── */}
+      {data.crawlFailed && (
+        <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-5 space-y-2">
+          <h4 className="text-sm font-semibold text-red-300 flex items-center gap-2">
+            ⚠️ 웹사이트 접근 불가 — 구조화 데이터 · 콘텐츠 품질 진단 생략
+          </h4>
+          <p className="text-xs text-gray-400 leading-relaxed">
+            {data.crawlError || `입력하신 웹사이트(${data.websiteUrl})에 접근할 수 없어 구조화 데이터(30점)와 콘텐츠 품질(30점)을 진단하지 못했습니다.`}
+            {' '}도메인 주소를 확인하고 다시 시도하시거나, 웹사이트 없이 엔티티/권위성만 진단할 수 있습니다.
+          </p>
+        </div>
+      )}
+
+      {/* ── Discovered Sources ── */}
+      {data.discoveredSources && data.discoveredSources.length > 0 && (
+        <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-2xl p-5 space-y-3">
+          <h4 className="text-sm font-semibold text-cyan-300 flex items-center gap-2">
+            🔍 자동 탐색 결과
+          </h4>
+          <div className="space-y-1.5">
+            {data.discoveredSources.map((src, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <span className="text-xs text-cyan-400 mt-0.5">•</span>
+                <p className="text-xs text-gray-300">{src}</p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

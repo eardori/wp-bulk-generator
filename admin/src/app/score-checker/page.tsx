@@ -20,21 +20,38 @@ type StepEvent = {
   // done payload
   businessName?: string;
   websiteUrl?: string;
+  hasWebsite?: boolean;
+  crawlFailed?: boolean;
+  crawlError?: string;
   totalScore?: number;
   grade?: string;
   categories?: ScoreResult["categories"];
   summary?: string;
   topPriorities?: string[];
   scanDate?: string;
+  discoveredSources?: string[];
+  // discovery step payload
+  discovery?: {
+    websiteUrl?: string;
+    address?: string;
+    phone?: string;
+    naverPlaceFound?: boolean;
+    googleBizFound?: boolean;
+    blogCount?: number;
+    directoryCount?: number;
+    snsCount?: number;
+    sources?: string[];
+  };
 };
 
 const STEPS = [
-  { step: 1, label: "웹페이지 크롤링", icon: "🌐" },
-  { step: 2, label: "구조화 데이터 분석", icon: "🔧" },
-  { step: 3, label: "콘텐츠 품질 체크", icon: "📝" },
-  { step: 4, label: "엔티티 존재감 확인", icon: "🌍" },
-  { step: 5, label: "권위성 신호 수집", icon: "⭐" },
-  { step: 6, label: "AI 종합 평가 생성", icon: "🤖" },
+  { step: 1, label: "업체 정보 자동 수집", icon: "🔍" },
+  { step: 2, label: "웹페이지 크롤링", icon: "🌐" },
+  { step: 3, label: "구조화 데이터 분석", icon: "🔧" },
+  { step: 4, label: "콘텐츠 품질 체크", icon: "📝" },
+  { step: 5, label: "엔티티 존재감 확인", icon: "🌍" },
+  { step: 6, label: "권위성 신호 수집", icon: "⭐" },
+  { step: 7, label: "AI 종합 평가 생성", icon: "🤖" },
 ];
 
 export default function ScoreCheckerPage() {
@@ -72,13 +89,16 @@ export default function ScoreCheckerPage() {
           setResultData({
             businessName: event.businessName || input.businessName,
             websiteUrl: event.websiteUrl || input.websiteUrl,
-            hasWebsite: !!(input.websiteUrl?.trim()),
+            hasWebsite: event.hasWebsite ?? !!(input.websiteUrl?.trim()),
+            crawlFailed: event.crawlFailed,
+            crawlError: event.crawlError,
             totalScore: event.totalScore || 0,
             grade: event.grade || "D",
             categories: event.categories || [],
             summary: event.summary || "",
             topPriorities: event.topPriorities || [],
             scanDate: event.scanDate || new Date().toISOString(),
+            discoveredSources: event.discoveredSources,
           });
           setState("results");
         }
@@ -181,7 +201,7 @@ export default function ScoreCheckerPage() {
             </div>
             <h3 className="text-lg font-semibold text-white">진단 진행 중...</h3>
             <p className="text-sm text-gray-400">
-              단계 {currentStep}/6 진행 중
+              단계 {currentStep}/{STEPS.length} 진행 중
             </p>
           </div>
 
@@ -229,7 +249,7 @@ export default function ScoreCheckerPage() {
           <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all duration-700"
-              style={{ width: `${(currentStep / 6) * 100}%` }}
+              style={{ width: `${(currentStep / STEPS.length) * 100}%` }}
             />
           </div>
         </div>

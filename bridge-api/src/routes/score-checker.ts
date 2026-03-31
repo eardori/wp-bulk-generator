@@ -28,6 +28,35 @@ interface CategoryResult {
   items: CheckItem[];
 }
 
+interface DiscoveryResult {
+  websiteUrl: string;
+  address: string;
+  phone: string;
+  businessType: string;
+  naverPlaceFound: boolean;
+  naverPlaceUrl: string;
+  naverBlogCount: number;
+  googleBizFound: boolean;
+  googleBizUrl: string;
+  kakaoMapFound: boolean;
+  kakaoMapUrl: string;
+  blogUrls: string[];
+  directoryUrls: string[];
+  snsUrls: string[];
+  sources: string[];       // user-facing log of what was discovered
+}
+
+function emptyDiscovery(): DiscoveryResult {
+  return {
+    websiteUrl: "", address: "", phone: "", businessType: "",
+    naverPlaceFound: false, naverPlaceUrl: "",
+    naverBlogCount: 0,
+    googleBizFound: false, googleBizUrl: "",
+    kakaoMapFound: false, kakaoMapUrl: "",
+    blogUrls: [], directoryUrls: [], snsUrls: [], sources: [],
+  };
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function getGeminiClient(): GoogleGenerativeAI | null {
@@ -41,6 +70,228 @@ function computeGrade(score: number): string {
   if (score >= 60) return "B";
   if (score >= 40) return "C";
   return "D";
+}
+
+// ── Auto-Discovery ──────────────────────────────────────────────────────────
+
+async function discoverViaGemini(businessName: string): Promise<Partial<DiscoveryResult>> {
+  const client = getGeminiClient();
+  if (!client) return {};
+
+  try {
+    const model = client.getGenerativeModel({
+      model: process.env.GEMINI_CONFIG_MODEL || "gemini-2.5-flash",
+    });
+
+    const prompt = `다음 업체의 정보를 JSON으로만 알려주세요. 모르는 항목은 빈 문자열로 두세요.
+업체명: ${businessName}
+
+반환 형식 (JSON만, 설명 없이):
+{"websiteUrl":"","address":"","phone":"","businessType":""}
+
+businessType은 다음 중 하나: restaurant, cafe, dermatology, dental, hair_salon, nail_salon, academy, gym, local_business`;
+
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        websiteUrl: parsed.websiteUrl || "",
+        address: parsed.address || "",
+        phone: parsed.phone || "",
+        businessType: parsed.businessType || "",
+      };
+    }
+  } catch { /* fallback */ }
+  return {};
+}
+
+async function discoverViaPlaywright(businessName: string): Promise<Partial<DiscoveryResult>> {
+  const result: Partial<DiscoveryResult> = {
+    naverPlaceFound: false, naverPlaceUrl: "",
+    naverBlogCount: 0,
+    googleBizFound: false, googleBizUrl: "",
+    kakaoMapFound: false, kakaoMapUrl: "",
+    blogUrls: [], directoryUrls: [], snsUrls: [],
+    websiteUrl: "", sources: [],
+  };
+
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  });
+
+  try {
+    // ── Google Search ──
+    const googlePage = await context.newPage();
+    try {
+      await googlePage.goto(
+        `https://www.google.com/search?q=${encodeURIComponent(businessName)}&hl=ko`,
+        { waitUntil: "domcontentloaded", timeout: 12000 }
+      );
+      await googlePage.waitForTimeout(2000);
+
+      const googleData = await googlePage.evaluate(() => {
+        const links: { href: string; text: string }[] = [];
+        document.querySelectorAll("a[href]").forEach((a) => {
+          const href = (a as HTMLAnchorElement).href;
+          const text = a.textContent?.trim() || "";
+          if (href && !href.includes("google.com") && !href.includes("gstatic") && !href.startsWith("javascript")) {
+            links.push({ href, text });
+          }
+        });
+        // Check for Google Business knowledge panel
+        const kpEl = document.querySelector('[data-attrid="title"], .SPZz6b, [data-local-attribute]');
+        const hasKnowledgePanel = !!kpEl;
+        return { links, hasKnowledgePanel };
+      });
+
+      if (googleData.hasKnowledgePanel) {
+        result.googleBizFound = true;
+        result.sources!.push("구글 비즈니스 프로필 발견");
+      }
+
+      const BLOG_DOMAINS = ["blog.naver.com", "tistory.com", "brunch.co.kr", "velog.io", "medium.com"];
+      const DIRECTORY_DOMAINS = ["diningcode.com", "siksinhot.com", "mangoplate.com", "catchtable.co.kr", "yogiyo.co.kr"];
+      const SNS_DOMAINS = ["instagram.com", "facebook.com", "twitter.com", "x.com"];
+
+      for (const link of googleData.links) {
+        const href = link.href.toLowerCase();
+        if (!result.websiteUrl && !BLOG_DOMAINS.some(d => href.includes(d)) && !DIRECTORY_DOMAINS.some(d => href.includes(d)) && !SNS_DOMAINS.some(d => href.includes(d)) && !href.includes("naver.com") && !href.includes("kakao") && !href.includes("map") && href.startsWith("http")) {
+          // First non-blog, non-directory, non-social link is likely the official site
+          result.websiteUrl = link.href;
+          result.sources!.push(`공식 웹사이트 발견: ${link.href}`);
+        }
+        if (BLOG_DOMAINS.some(d => href.includes(d))) result.blogUrls!.push(link.href);
+        if (DIRECTORY_DOMAINS.some(d => href.includes(d))) result.directoryUrls!.push(link.href);
+        if (SNS_DOMAINS.some(d => href.includes(d))) result.snsUrls!.push(link.href);
+      }
+    } catch { result.sources!.push("구글 검색 실패 (타임아웃)"); }
+    await googlePage.close();
+
+    // ── Naver Search ──
+    const naverPage = await context.newPage();
+    try {
+      await naverPage.goto(
+        `https://search.naver.com/search.naver?query=${encodeURIComponent(businessName)}`,
+        { waitUntil: "domcontentloaded", timeout: 12000 }
+      );
+      await naverPage.waitForTimeout(2000);
+
+      const naverData = await naverPage.evaluate(() => {
+        // Check for Naver Place section
+        const placeSection = document.querySelector('[class*="place_section"], [class*="sc_new_place"], [data-module-name="place"]');
+        let placeUrl = "";
+        if (placeSection) {
+          const placeLink = placeSection.querySelector("a[href*='place.naver.com'], a[href*='map.naver.com']") as HTMLAnchorElement | null;
+          placeUrl = placeLink?.href || "";
+        }
+        // Also check for place links anywhere
+        if (!placeUrl) {
+          const anyPlaceLink = document.querySelector("a[href*='place.naver.com']") as HTMLAnchorElement | null;
+          placeUrl = anyPlaceLink?.href || "";
+        }
+
+        // Blog search count — look for blog tab count
+        const blogCountEl = document.querySelector('[class*="blog"] [class*="count"], [class*="sub_count"]');
+        let blogCountText = blogCountEl?.textContent || "";
+        // Try to find blog results
+        const blogResults = document.querySelectorAll('[class*="blog_item"], [class*="bx_blog"]');
+
+        // Find website link from place section
+        let websiteFromPlace = "";
+        const siteLink = document.querySelector('a[href*="http"]:not([href*="naver.com"]):not([href*="kakao"])');
+        if (siteLink) websiteFromPlace = (siteLink as HTMLAnchorElement).href;
+
+        return {
+          hasPlace: !!placeSection || !!placeUrl,
+          placeUrl,
+          blogCountText,
+          blogResultCount: blogResults.length,
+          websiteFromPlace,
+        };
+      });
+
+      if (naverData.hasPlace) {
+        result.naverPlaceFound = true;
+        result.naverPlaceUrl = naverData.placeUrl;
+        result.sources!.push("네이버 플레이스 등록 확인");
+      }
+
+      // Try to get blog count from Naver blog search
+      const blogPage = await context.newPage();
+      try {
+        await blogPage.goto(
+          `https://search.naver.com/search.naver?where=blog&query=${encodeURIComponent(businessName)}`,
+          { waitUntil: "domcontentloaded", timeout: 10000 }
+        );
+        await blogPage.waitForTimeout(1500);
+        const blogCount = await blogPage.evaluate(() => {
+          const countEl = document.querySelector('[class*="title_num"], [class*="result_num"], .search_title_area .sub_count');
+          const text = countEl?.textContent || "";
+          const match = text.replace(/,/g, "").match(/(\d+)/);
+          return match ? parseInt(match[1]) : 0;
+        });
+        result.naverBlogCount = blogCount;
+        if (blogCount > 0) result.sources!.push(`네이버 블로그 ${blogCount}건 발견`);
+      } catch { /* skip */ }
+      await blogPage.close();
+
+    } catch { result.sources!.push("네이버 검색 실패 (타임아웃)"); }
+    await naverPage.close();
+
+  } finally {
+    await context.close();
+  }
+
+  return result;
+}
+
+async function runDiscovery(
+  businessName: string,
+  existingUrl: string,
+  existingAddress: string,
+  existingPhone: string,
+  existingType: string,
+): Promise<DiscoveryResult> {
+  const discovery = emptyDiscovery();
+
+  // Run Gemini and Playwright in parallel
+  const [geminiResult, playwrightResult] = await Promise.allSettled([
+    discoverViaGemini(businessName),
+    discoverViaPlaywright(businessName),
+  ]);
+
+  const gemini = geminiResult.status === "fulfilled" ? geminiResult.value : {};
+  const pw = playwrightResult.status === "fulfilled" ? playwrightResult.value : {};
+
+  // Merge: user input > Playwright > Gemini
+  discovery.websiteUrl = existingUrl || pw.websiteUrl || gemini.websiteUrl || "";
+  discovery.address = existingAddress || gemini.address || "";
+  discovery.phone = existingPhone || gemini.phone || "";
+  discovery.businessType = existingType || gemini.businessType || "local_business";
+
+  // Playwright search results
+  discovery.naverPlaceFound = pw.naverPlaceFound || false;
+  discovery.naverPlaceUrl = pw.naverPlaceUrl || "";
+  discovery.naverBlogCount = pw.naverBlogCount || 0;
+  discovery.googleBizFound = pw.googleBizFound || false;
+  discovery.googleBizUrl = pw.googleBizUrl || "";
+  discovery.blogUrls = [...new Set(pw.blogUrls || [])].slice(0, 10);
+  discovery.directoryUrls = [...new Set(pw.directoryUrls || [])].slice(0, 5);
+  discovery.snsUrls = [...new Set(pw.snsUrls || [])].slice(0, 5);
+  discovery.sources = pw.sources || [];
+
+  if (gemini.websiteUrl && !existingUrl) {
+    discovery.sources.push(`Gemini 추천 웹사이트: ${gemini.websiteUrl}`);
+  }
+  if (gemini.address && !existingAddress) {
+    discovery.sources.push(`주소 자동 수집: ${gemini.address}`);
+  }
+
+  return discovery;
 }
 
 // ── Category A: Structured Data (30 pts) ─────────────────────────────────────
@@ -354,7 +605,8 @@ function analyzeContentQuality(
 
 async function analyzeEntityPresence(
   businessName: string,
-  address: string
+  address: string,
+  discovery?: DiscoveryResult
 ): Promise<CategoryResult> {
   const items: CheckItem[] = [];
   const hasNaverApi = !!(process.env.NAVER_CLIENT_ID && process.env.NAVER_CLIENT_SECRET);
@@ -391,11 +643,24 @@ async function analyzeEntityPresence(
         recommendation: "네이버 API 호출 중 오류가 발생했습니다.",
       });
     }
+  } else if (discovery?.naverPlaceFound) {
+    // Fallback: use Playwright discovery result
+    items.push({
+      name: "네이버 플레이스 등록 여부",
+      maxScore: 7,
+      actualScore: 7,
+      status: "pass",
+      recommendation: `네이버 플레이스에 등록 확인됨 (자동 탐색).${discovery.naverPlaceUrl ? ` URL: ${discovery.naverPlaceUrl}` : ""}`,
+    });
   } else {
     items.push({
       name: "네이버 플레이스 등록 여부",
-      maxScore: 7, actualScore: 0, status: "fail",
-      recommendation: "네이버 검색 API 키가 설정되지 않아 진단할 수 없습니다. (NAVER_CLIENT_ID, NAVER_CLIENT_SECRET)",
+      maxScore: 7,
+      actualScore: discovery ? 0 : 0,
+      status: "fail",
+      recommendation: discovery
+        ? "네이버 검색에서 플레이스 정보를 찾지 못했습니다. 네이버 플레이스에 업체를 등록하세요."
+        : "네이버 검색 API 키가 설정되지 않아 진단할 수 없습니다. (NAVER_CLIENT_ID, NAVER_CLIENT_SECRET)",
     });
   }
 
@@ -423,11 +688,23 @@ async function analyzeEntityPresence(
         recommendation: "Google Places API 호출 중 오류가 발생했습니다.",
       });
     }
+  } else if (discovery?.googleBizFound) {
+    items.push({
+      name: "구글 비즈니스 프로필 등록 여부",
+      maxScore: 7,
+      actualScore: 7,
+      status: "pass",
+      recommendation: "구글 검색에서 비즈니스 프로필(지식 패널)이 확인되었습니다 (자동 탐색).",
+    });
   } else {
     items.push({
       name: "구글 비즈니스 프로필 등록 여부",
-      maxScore: 7, actualScore: 0, status: "fail",
-      recommendation: "Google Places API 키가 설정되지 않아 진단할 수 없습니다. (GOOGLE_PLACES_API_KEY)",
+      maxScore: 7,
+      actualScore: discovery ? 0 : 0,
+      status: "fail",
+      recommendation: discovery
+        ? "구글 검색에서 비즈니스 프로필을 찾지 못했습니다. 구글 비즈니스 프로필(GBP)에 업체를 등록하세요."
+        : "Google Places API 키가 설정되지 않아 진단할 수 없습니다. (GOOGLE_PLACES_API_KEY)",
     });
   }
 
@@ -459,6 +736,7 @@ async function analyzeEntityPresence(
       });
     }
   } else {
+    // No Playwright fallback for Kakao for now
     items.push({
       name: "카카오맵 등록 여부",
       maxScore: 4, actualScore: 0, status: "fail",
@@ -466,22 +744,37 @@ async function analyzeEntityPresence(
     });
   }
 
-  // 4. NAP 일관성 (4점) — 간소화: API 사용 가능 여부에 따라
-  items.push({
-    name: "NAP 일관성 (플랫폼 간 정보 일치)",
-    maxScore: 4,
-    actualScore: 0,
-    status: "fail",
-    recommendation: "여러 플랫폼의 업체명/주소/전화번호가 동일한지 수동 확인이 필요합니다.",
-  });
+  // 4. NAP 일관성 (4점)
+  if (discovery && discovery.address && discovery.phone) {
+    // Basic NAP consistency: we have auto-discovered info
+    items.push({
+      name: "NAP 일관성 (플랫폼 간 정보 일치)",
+      maxScore: 4,
+      actualScore: 2,
+      status: "partial",
+      recommendation: `업체 정보가 자동 수집되었습니다 (주소: ${discovery.address}). 각 플랫폼에서 이 정보가 일치하는지 확인하세요.`,
+    });
+  } else {
+    items.push({
+      name: "NAP 일관성 (플랫폼 간 정보 일치)",
+      maxScore: 4,
+      actualScore: 0,
+      status: "fail",
+      recommendation: "여러 플랫폼의 업체명/주소/전화번호가 동일한지 수동 확인이 필요합니다.",
+    });
+  }
 
   // 5. 업종 디렉토리 등록 수 (3점)
+  const dirCount = discovery?.directoryUrls?.length || 0;
+  const dirScore = dirCount >= 3 ? 3 : dirCount >= 2 ? 2 : dirCount >= 1 ? 1 : 0;
   items.push({
     name: "업종 디렉토리 등록 수",
     maxScore: 3,
-    actualScore: 0,
-    status: "fail",
-    recommendation: "업종별 전문 디렉토리(예: 다이닝코드, 식신, 강남닷컴 등)에 등록하면 엔티티 존재감이 강화됩니다.",
+    actualScore: dirScore,
+    status: dirScore >= 3 ? "pass" : dirScore > 0 ? "partial" : "fail",
+    recommendation: dirCount > 0
+      ? `${dirCount}개 업종 디렉토리에서 발견되었습니다 (${discovery!.directoryUrls.map(u => new URL(u).hostname).join(", ")}).`
+      : "업종별 전문 디렉토리(예: 다이닝코드, 식신, 강남닷컴 등)에 등록하면 엔티티 존재감이 강화됩니다.",
   });
 
   const score = items.reduce((sum, item) => sum + item.actualScore, 0);
@@ -491,7 +784,8 @@ async function analyzeEntityPresence(
 // ── Category D: Authority Signals (15 pts) ───────────────────────────────────
 
 async function analyzeAuthoritySignals(
-  businessName: string
+  businessName: string,
+  discovery?: DiscoveryResult
 ): Promise<CategoryResult> {
   const items: CheckItem[] = [];
   const hasNaverApi = !!(process.env.NAVER_CLIENT_ID && process.env.NAVER_CLIENT_SECRET);
@@ -537,10 +831,16 @@ async function analyzeAuthoritySignals(
         { name: "구글 리뷰 평균 평점", maxScore: 2, actualScore: 0, status: "fail", recommendation: "Google API 오류." }
       );
     }
+  } else if (discovery?.googleBizFound) {
+    // Google Biz found via Playwright — give partial credit
+    items.push(
+      { name: "구글 리뷰 수", maxScore: 4, actualScore: 2, status: "partial", recommendation: "구글 비즈니스 프로필이 확인되었지만, API 키가 없어 정확한 리뷰 수를 확인할 수 없습니다." },
+      { name: "구글 리뷰 평균 평점", maxScore: 2, actualScore: 1, status: "partial", recommendation: "구글 비즈니스 프로필이 존재하므로 리뷰/평점이 있을 가능성이 높습니다." }
+    );
   } else {
     items.push(
-      { name: "구글 리뷰 수", maxScore: 4, actualScore: 0, status: "fail", recommendation: "Google Places API 키 미설정." },
-      { name: "구글 리뷰 평균 평점", maxScore: 2, actualScore: 0, status: "fail", recommendation: "Google Places API 키 미설정." }
+      { name: "구글 리뷰 수", maxScore: 4, actualScore: 0, status: "fail", recommendation: discovery ? "구글 비즈니스 프로필이 확인되지 않아 리뷰 정보를 수집할 수 없습니다." : "Google Places API 키 미설정." },
+      { name: "구글 리뷰 평균 평점", maxScore: 2, actualScore: 0, status: "fail", recommendation: discovery ? "구글 비즈니스 프로필 등록 후 리뷰를 수집하세요." : "Google Places API 키 미설정." }
     );
   }
 
@@ -573,30 +873,51 @@ async function analyzeAuthoritySignals(
         recommendation: "네이버 API 호출 오류.",
       });
     }
+  } else if (discovery && discovery.naverBlogCount > 0) {
+    // Fallback: Playwright discovered blog count
+    const blogCount = discovery.naverBlogCount;
+    const blogScore = blogCount >= 100 ? 4 : blogCount >= 30 ? 3 : blogCount >= 10 ? 2 : blogCount > 0 ? 1 : 0;
+    items.push({
+      name: "네이버 블로그 언급 수",
+      maxScore: 4,
+      actualScore: blogScore,
+      status: blogScore >= 3 ? "pass" : blogScore > 0 ? "partial" : "fail",
+      recommendation: `네이버 블로그에서 약 ${blogCount}건 언급 확인 (자동 탐색). ${blogScore >= 3 ? "충분한 온라인 존재감입니다." : "블로그 마케팅을 통해 언급 수를 늘리세요."}`,
+    });
   } else {
     items.push({
       name: "네이버 블로그 언급 수",
       maxScore: 4, actualScore: 0, status: "fail",
-      recommendation: "네이버 검색 API 키 미설정.",
+      recommendation: discovery
+        ? "네이버 블로그에서 관련 언급을 찾지 못했습니다."
+        : "네이버 검색 API 키 미설정.",
     });
   }
 
-  // 4. 블로그 포스트 빈도 (3점) — 네이버 blog 검색 활용
+  // 4. 블로그 포스트 빈도 (3점)
+  const blogUrlCount = discovery?.blogUrls?.length || 0;
+  const blogFreqScore = blogUrlCount >= 5 ? 3 : blogUrlCount >= 3 ? 2 : blogUrlCount >= 1 ? 1 : 0;
   items.push({
     name: "블로그 포스트 언급 빈도",
     maxScore: 3,
-    actualScore: 0,
-    status: "fail",
-    recommendation: "정기적인 블로그 포스팅과 리뷰 관리로 온라인 권위성을 높이세요.",
+    actualScore: blogFreqScore,
+    status: blogFreqScore >= 3 ? "pass" : blogFreqScore > 0 ? "partial" : "fail",
+    recommendation: blogUrlCount > 0
+      ? `검색 결과에서 ${blogUrlCount}개의 블로그 포스트가 발견되었습니다.${blogFreqScore < 3 ? " 정기적인 블로그 포스팅으로 노출을 늘리세요." : ""}`
+      : "정기적인 블로그 포스팅과 리뷰 관리로 온라인 권위성을 높이세요.",
   });
 
   // 5. SNS 멘션 (2점)
+  const snsCount = discovery?.snsUrls?.length || 0;
+  const snsScore = snsCount >= 2 ? 2 : snsCount >= 1 ? 1 : 0;
   items.push({
     name: "SNS 멘션 (인스타그램 해시태그 등)",
     maxScore: 2,
-    actualScore: 0,
-    status: "fail",
-    recommendation: "인스타그램 해시태그, SNS 언급을 통해 브랜드 인지도를 높이세요.",
+    actualScore: snsScore,
+    status: snsScore >= 2 ? "pass" : snsScore > 0 ? "partial" : "fail",
+    recommendation: snsCount > 0
+      ? `${snsCount}개 SNS 플랫폼에서 언급이 발견되었습니다 (${discovery!.snsUrls.map(u => { try { return new URL(u).hostname; } catch { return u; } }).join(", ")}).`
+      : "인스타그램 해시태그, SNS 언급을 통해 브랜드 인지도를 높이세요.",
   });
 
   const score = items.reduce((sum, item) => sum + item.actualScore, 0);
@@ -714,176 +1035,213 @@ export async function scoreCheckerRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "업체명은 필수입니다." });
     }
 
-    const hasWebsite = !!body.websiteUrl?.trim();
     const { send, close } = setupSSE(reply);
 
     try {
       send({
         type: "start",
         businessName: body.businessName,
-        hasWebsite,
-        message: `${body.businessName} 진단 시작...${hasWebsite ? "" : " (웹사이트 없음 — 엔티티/권위성만 진단)"}`,
+        message: `${body.businessName} 진단 시작... 업체 정보를 자동 수집합니다.`,
       });
 
-      let structuredData: CategoryResult;
-      let contentQuality: CategoryResult;
+      // ── Step 1: Auto-Discovery ──
+      send({ type: "step", step: 1, label: "업체 정보 자동 수집 중...", message: "Gemini + 검색 엔진으로 업체 정보를 수집합니다..." });
+
+      const discovery = await runDiscovery(
+        body.businessName,
+        body.websiteUrl?.trim() || "",
+        body.address?.trim() || "",
+        body.phone?.trim() || "",
+        body.businessType || "",
+      );
+
+      // Use discovered values
+      const websiteUrl = discovery.websiteUrl;
+      const address = discovery.address;
+      const businessType = discovery.businessType || "local_business";
+      const hasWebsite = !!websiteUrl;
+
+      send({
+        type: "step-done", step: 1,
+        message: `✅ 자동 수집 완료${hasWebsite ? ` — 웹사이트: ${websiteUrl}` : " — 웹사이트 미발견"}`,
+        discovery: {
+          websiteUrl,
+          address: discovery.address,
+          phone: discovery.phone,
+          naverPlaceFound: discovery.naverPlaceFound,
+          googleBizFound: discovery.googleBizFound,
+          blogCount: discovery.blogUrls.length,
+          directoryCount: discovery.directoryUrls.length,
+          snsCount: discovery.snsUrls.length,
+          sources: discovery.sources,
+        },
+      });
+
+      let structuredData: CategoryResult = noWebsiteStructuredData();
+      let contentQuality: CategoryResult = noWebsiteContentQuality();
+      let crawlSuccess = false;
+      let crawlFailedReason = "";
 
       if (hasWebsite) {
-        // ── Website exists: crawl and analyze A & B ──
-        send({ type: "step", step: 1, label: "웹페이지 크롤링 중...", message: "웹사이트 HTML을 가져오고 있습니다..." });
+        // ── Step 2: Crawl website ──
+        send({ type: "step", step: 2, label: "웹페이지 크롤링 중...", message: `${websiteUrl} HTML을 가져오고 있습니다...` });
 
-        const browser = await getBrowser();
-        const context = await browser.newContext({
-          viewport: { width: 1280, height: 800 },
-          userAgent:
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        });
-        const page = await context.newPage();
+        try {
+          const browser = await getBrowser();
+          const context = await browser.newContext({
+            viewport: { width: 1280, height: 800 },
+            userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          });
+          const page = await context.newPage();
 
-        await page.goto(body.websiteUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: 15000,
-        });
-        await page.waitForTimeout(2000);
+          await page.goto(websiteUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: 15000,
+          });
+          await page.waitForTimeout(2000);
 
-        const pageData = await page.evaluate(() => {
-          const title = document.title || "";
-          const metaDesc =
-            document
-              .querySelector('meta[name="description"]')
-              ?.getAttribute("content") || "";
-          const html = document.documentElement.outerHTML;
-          const bodyText = document.body?.innerText || "";
+          const pageData = await page.evaluate(() => {
+            const title = document.title || "";
+            const metaDesc = document.querySelector('meta[name="description"]')?.getAttribute("content") || "";
+            const html = document.documentElement.outerHTML;
+            const bodyText = document.body?.innerText || "";
 
-          const h1s = Array.from(document.querySelectorAll("h1")).map(
-            (el) => el.textContent?.trim() || ""
-          );
-          const h2s = Array.from(document.querySelectorAll("h2")).map(
-            (el) => el.textContent?.trim() || ""
-          );
-          const firstP =
-            document.querySelector("p")?.textContent?.trim() || "";
-          const hasListElements =
-            document.querySelectorAll("ul li, ol li").length >= 3;
-          const cleanText = bodyText.replace(/\s+/g, " ").trim();
-          const wordCount = cleanText.length > 0
-            ? Math.round(cleanText.split(/\s+/).length + cleanText.replace(/[a-zA-Z\s]/g, "").length / 2)
-            : 0;
+            const h1s = Array.from(document.querySelectorAll("h1")).map((el) => el.textContent?.trim() || "");
+            const h2s = Array.from(document.querySelectorAll("h2")).map((el) => el.textContent?.trim() || "");
+            const firstP = document.querySelector("p")?.textContent?.trim() || "";
+            const hasListElements = document.querySelectorAll("ul li, ol li").length >= 3;
+            const cleanText = bodyText.replace(/\s+/g, " ").trim();
+            const wordCount = cleanText.length > 0
+              ? Math.round(cleanText.split(/\s+/).length + cleanText.replace(/[a-zA-Z\s]/g, "").length / 2)
+              : 0;
 
-          const h2Sections: Array<{ heading: string; firstParagraph: string }> = [];
-          const h2Elements = document.querySelectorAll("h2");
-          h2Elements.forEach((h2) => {
-            const heading = h2.textContent?.trim() || "";
-            let nextEl = h2.nextElementSibling;
-            let fp = "";
-            while (nextEl && nextEl.tagName !== "H2" && !fp) {
-              if (nextEl.tagName === "P" && nextEl.textContent) {
-                fp = nextEl.textContent.trim();
+            const h2Sections: Array<{ heading: string; firstParagraph: string }> = [];
+            document.querySelectorAll("h2").forEach((h2) => {
+              const heading = h2.textContent?.trim() || "";
+              let nextEl = h2.nextElementSibling;
+              let fp = "";
+              while (nextEl && nextEl.tagName !== "H2" && !fp) {
+                if (nextEl.tagName === "P" && nextEl.textContent) fp = nextEl.textContent.trim();
+                nextEl = nextEl.nextElementSibling;
               }
-              nextEl = nextEl.nextElementSibling;
-            }
-            h2Sections.push({ heading, firstParagraph: fp });
+              h2Sections.push({ heading, firstParagraph: fp });
+            });
+
+            const hasFaqPattern =
+              !!document.querySelector('[class*="faq"], [id*="faq"], [class*="FAQ"], [id*="FAQ"]') ||
+              html.includes("FAQPage") ||
+              bodyText.match(/Q[.:]\s|A[.:]\s|질문|답변|자주\s*묻는/i) !== null;
+
+            return { title, metaDesc, html, bodyText, h1s, h2s, firstParagraph: firstP, hasListElements, wordCount, h2Sections, hasFaqPattern };
           });
 
-          const hasFaqPattern =
-            !!document.querySelector('[class*="faq"], [id*="faq"], [class*="FAQ"], [id*="FAQ"]') ||
-            html.includes("FAQPage") ||
-            bodyText.match(/Q[.:]\s|A[.:]\s|질문|답변|자주\s*묻는/i) !== null;
+          await context.close();
+          send({ type: "step-done", step: 2, message: "✅ 웹페이지 크롤링 완료" });
+          crawlSuccess = true;
 
-          return {
-            title, metaDesc, html, bodyText,
-            h1s, h2s, firstParagraph: firstP,
-            hasListElements, wordCount, h2Sections,
-            hasFaqPattern,
-          };
-        });
+          // Step 3: Structured Data
+          send({ type: "step", step: 3, label: "구조화 데이터 분석 중...", message: "JSON-LD Schema를 분석하고 있습니다..." });
+          structuredData = analyzeStructuredData(pageData.html, businessType);
+          send({
+            type: "category-done", step: 3, category: "structured_data",
+            label: structuredData.label, score: structuredData.score, maxScore: structuredData.maxScore,
+            message: `✅ 구조화 데이터: ${structuredData.score}/${structuredData.maxScore}점`,
+          });
 
-        await context.close();
+          // Step 4: Content Quality
+          send({ type: "step", step: 4, label: "콘텐츠 품질 체크 중...", message: "페이지 구조와 콘텐츠를 분석합니다..." });
+          contentQuality = analyzeContentQuality(pageData as PageContent, body.businessName, address);
+          send({
+            type: "category-done", step: 4, category: "content_quality",
+            label: contentQuality.label, score: contentQuality.score, maxScore: contentQuality.maxScore,
+            message: `✅ 콘텐츠 품질: ${contentQuality.score}/${contentQuality.maxScore}점`,
+          });
+        } catch (crawlError) {
+          // Determine user-friendly error message
+          const errMsg = crawlError instanceof Error ? crawlError.message : String(crawlError);
+          let userMessage: string;
+          crawlSuccess = false;
+          if (errMsg.includes("ERR_NAME_NOT_RESOLVED")) {
+            userMessage = `웹사이트 주소(${websiteUrl})를 찾을 수 없습니다. 도메인이 존재하지 않거나 DNS가 등록되지 않은 상태입니다.`;
+          } else if (errMsg.includes("ERR_CONNECTION_REFUSED")) {
+            userMessage = `웹사이트(${websiteUrl})에 연결할 수 없습니다. 서버가 응답하지 않습니다.`;
+          } else if (errMsg.includes("ERR_CONNECTION_TIMED_OUT") || errMsg.includes("Timeout")) {
+            userMessage = `웹사이트(${websiteUrl}) 연결 시간이 초과되었습니다. 서버 응답이 느리거나 접근이 차단되었을 수 있습니다.`;
+          } else if (errMsg.includes("ERR_SSL") || errMsg.includes("ERR_CERT")) {
+            userMessage = `웹사이트(${websiteUrl})의 SSL 인증서에 문제가 있습니다.`;
+          } else {
+            userMessage = `웹사이트(${websiteUrl}) 크롤링 실패: ${errMsg.slice(0, 100)}`;
+          }
 
-        send({ type: "step-done", step: 1, message: "✅ 웹페이지 크롤링 완료" });
+          crawlFailedReason = userMessage;
+          send({ type: "step-done", step: 2, message: `⚠️ ${userMessage} — 엔티티/권위성 진단으로 넘어갑니다.` });
+        }
 
-        // Step 2: Structured Data
-        send({ type: "step", step: 2, label: "구조화 데이터 분석 중...", message: "JSON-LD Schema를 분석하고 있습니다..." });
-        structuredData = analyzeStructuredData(pageData.html, body.businessType);
-        send({
-          type: "category-done", step: 2, category: "structured_data",
-          label: structuredData.label, score: structuredData.score, maxScore: structuredData.maxScore,
-          message: `✅ 구조화 데이터: ${structuredData.score}/${structuredData.maxScore}점`,
-        });
+        if (!crawlSuccess) {
+          // Crawling failed — fall back to no-website analysis for structured data & content
+          send({ type: "step", step: 3, label: "구조화 데이터...", message: "웹사이트 접근 불가로 구조화 데이터를 진단할 수 없습니다." });
+          structuredData = noWebsiteStructuredData();
+          send({ type: "category-done", step: 3, category: "structured_data", label: structuredData.label, score: 0, maxScore: 30, message: "⚠️ 구조화 데이터: 0/30점 (웹사이트 접근 불가)" });
 
-        // Step 3: Content Quality
-        send({ type: "step", step: 3, label: "콘텐츠 품질 체크 중...", message: "페이지 구조와 콘텐츠를 분석하고 있습니다..." });
-        contentQuality = analyzeContentQuality(pageData as PageContent, body.businessName, body.address);
-        send({
-          type: "category-done", step: 3, category: "content_quality",
-          label: contentQuality.label, score: contentQuality.score, maxScore: contentQuality.maxScore,
-          message: `✅ 콘텐츠 품질: ${contentQuality.score}/${contentQuality.maxScore}점`,
-        });
+          send({ type: "step", step: 4, label: "콘텐츠 품질...", message: "웹사이트 접근 불가로 콘텐츠 품질을 진단할 수 없습니다." });
+          contentQuality = noWebsiteContentQuality();
+          send({ type: "category-done", step: 4, category: "content_quality", label: contentQuality.label, score: 0, maxScore: 30, message: "⚠️ 콘텐츠 품질: 0/30점 (웹사이트 접근 불가)" });
+        }
       } else {
-        // ── No website: skip A & B with 0 points ──
-        send({ type: "step", step: 1, label: "웹사이트 확인...", message: "웹사이트가 입력되지 않았습니다. 엔티티/권위성 진단으로 넘어갑니다." });
-        send({ type: "step-done", step: 1, message: "⏭️ 웹사이트 없음 — 크롤링 건너뜀" });
+        // ── No website found ──
+        send({ type: "step", step: 2, label: "웹사이트 확인...", message: "웹사이트를 찾지 못했습니다. 엔티티/권위성 진단으로 넘어갑니다." });
+        send({ type: "step-done", step: 2, message: "⏭️ 웹사이트 미발견 — 크롤링 건너뜀" });
 
-        send({ type: "step", step: 2, label: "구조화 데이터...", message: "웹사이트가 없어 구조화 데이터를 진단할 수 없습니다." });
+        send({ type: "step", step: 3, label: "구조화 데이터...", message: "웹사이트가 없어 구조화 데이터를 진단할 수 없습니다." });
         structuredData = noWebsiteStructuredData();
-        send({
-          type: "category-done", step: 2, category: "structured_data",
-          label: structuredData.label, score: 0, maxScore: 30,
-          message: "⚠️ 구조화 데이터: 0/30점 (웹사이트 없음)",
-        });
+        send({ type: "category-done", step: 3, category: "structured_data", label: structuredData.label, score: 0, maxScore: 30, message: "⚠️ 구조화 데이터: 0/30점 (웹사이트 없음)" });
 
-        send({ type: "step", step: 3, label: "콘텐츠 품질...", message: "웹사이트가 없어 콘텐츠 품질을 진단할 수 없습니다." });
+        send({ type: "step", step: 4, label: "콘텐츠 품질...", message: "웹사이트가 없어 콘텐츠 품질을 진단할 수 없습니다." });
         contentQuality = noWebsiteContentQuality();
-        send({
-          type: "category-done", step: 3, category: "content_quality",
-          label: contentQuality.label, score: 0, maxScore: 30,
-          message: "⚠️ 콘텐츠 품질: 0/30점 (웹사이트 없음)",
-        });
+        send({ type: "category-done", step: 4, category: "content_quality", label: contentQuality.label, score: 0, maxScore: 30, message: "⚠️ 콘텐츠 품질: 0/30점 (웹사이트 없음)" });
       }
 
-      // Step 4: Entity Presence (always runs)
-      send({ type: "step", step: 4, label: "엔티티 존재감 확인 중...", message: "네이버/구글/카카오 등록 여부를 확인합니다..." });
-      const entityPresence = await analyzeEntityPresence(body.businessName, body.address);
+      // Step 5: Entity Presence (uses discovery fallback)
+      send({ type: "step", step: 5, label: "엔티티 존재감 확인 중...", message: "네이버/구글/카카오 등록 여부를 확인합니다..." });
+      const entityPresence = await analyzeEntityPresence(body.businessName, address, discovery);
       send({
-        type: "category-done", step: 4, category: "entity_presence",
+        type: "category-done", step: 5, category: "entity_presence",
         label: entityPresence.label, score: entityPresence.score, maxScore: entityPresence.maxScore,
         message: `✅ 엔티티 존재감: ${entityPresence.score}/${entityPresence.maxScore}점`,
       });
 
-      // Step 5: Authority Signals (always runs)
-      send({ type: "step", step: 5, label: "권위성 신호 수집 중...", message: "리뷰, 블로그 언급 등을 확인합니다..." });
-      const authoritySignals = await analyzeAuthoritySignals(body.businessName);
+      // Step 6: Authority Signals (uses discovery fallback)
+      send({ type: "step", step: 6, label: "권위성 신호 수집 중...", message: "리뷰, 블로그 언급 등을 확인합니다..." });
+      const authoritySignals = await analyzeAuthoritySignals(body.businessName, discovery);
       send({
-        type: "category-done", step: 5, category: "authority_signals",
+        type: "category-done", step: 6, category: "authority_signals",
         label: authoritySignals.label, score: authoritySignals.score, maxScore: authoritySignals.maxScore,
         message: `✅ 권위성 신호: ${authoritySignals.score}/${authoritySignals.maxScore}점`,
       });
 
-      // Step 6: Calculate total & generate summary
+      // Step 7: Calculate total & generate summary
       const categories = [structuredData, contentQuality, entityPresence, authoritySignals];
       const totalScore = categories.reduce((sum, c) => sum + c.score, 0);
       const grade = computeGrade(totalScore);
 
-      send({ type: "step", step: 6, label: "AI 종합 평가 생성 중...", message: "결과를 분석하고 개선 가이드를 작성합니다..." });
-      const { summary, topPriorities } = await generateAiSummary(
-        body.businessName,
-        totalScore,
-        grade,
-        categories
-      );
+      send({ type: "step", step: 7, label: "AI 종합 평가 생성 중...", message: "결과를 분석하고 개선 가이드를 작성합니다..." });
+      const { summary, topPriorities } = await generateAiSummary(body.businessName, totalScore, grade, categories);
 
       // Final result
       send({
         type: "done",
         businessName: body.businessName,
-        websiteUrl: body.websiteUrl || "",
+        websiteUrl: websiteUrl || "",
         hasWebsite,
+        crawlFailed: hasWebsite && !crawlSuccess,
+        crawlError: crawlFailedReason || undefined,
         totalScore,
         grade,
         categories,
         summary,
         topPriorities,
         scanDate: new Date().toISOString(),
+        discoveredSources: discovery.sources,
         message: `진단 완료! ${body.businessName}: ${totalScore}점 (${grade}등급)${!hasWebsite ? " — 웹사이트 제작 시 최대 60점 추가 가능" : ""}`,
       });
     } catch (error) {
