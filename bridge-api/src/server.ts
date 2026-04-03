@@ -19,6 +19,7 @@ import { schemaRoutes } from "./routes/schema.js";
 import { aiTestRoutes } from "./routes/ai-test.js";
 import { scoreCheckerRoutes } from "./routes/score-checker.js";
 import { jobRoutes } from "./routes/jobs.js";
+import { backfillAeoRoutes } from "./routes/backfill-aeo.js";
 import { startJobWorker, stopJobWorker } from "./lib/job-worker.js";
 
 const PORT = Number(process.env.PORT) || 4000;
@@ -99,6 +100,7 @@ await app.register(schemaRoutes);
 await app.register(aiTestRoutes);
 await app.register(scoreCheckerRoutes);
 await app.register(jobRoutes);
+await app.register(backfillAeoRoutes);
 
 // Graceful shutdown
 const shutdown = async () => {

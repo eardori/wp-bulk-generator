@@ -363,6 +363,42 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
   const cleanedHtml = stripReviewReferenceMarkers(replacedHtml);
   let finalHtml = enhanceFaqMicrodata(cleanedHtml);
 
+  // ── 목차 (Table of Contents) 자동 삽입 ──
+  const tocHtml = buildTableOfContents(finalHtml);
+  if (tocHtml) {
+    // summary-box 바로 뒤 또는 첫 H2 바로 앞에 삽입
+    const summaryBoxEnd = finalHtml.indexOf('</div>', finalHtml.indexOf('class="summary-box"'));
+    if (summaryBoxEnd > 0) {
+      const insertAt = summaryBoxEnd + '</div>'.length;
+      finalHtml = finalHtml.slice(0, insertAt) + '\n' + tocHtml + finalHtml.slice(insertAt);
+    } else {
+      const firstH2 = finalHtml.indexOf('<h2');
+      if (firstH2 > 0) {
+        finalHtml = finalHtml.slice(0, firstH2) + tocHtml + '\n' + finalHtml.slice(firstH2);
+      }
+    }
+  }
+
+  // ── 작성자 소개 박스 (Author Bio) ──
+  const authorBioHtml = buildAuthorBioHtml(site);
+  if (authorBioHtml) {
+    // FAQ 섹션이나 관련 글 앞, 또는 콘텐츠 맨 끝에 삽입
+    const faqPos = finalHtml.indexOf('<h2>Q&A');
+    const relatedPos = finalHtml.indexOf('class="related-posts"');
+    const insertBefore = faqPos > 0 ? faqPos : relatedPos > 0 ? finalHtml.lastIndexOf('<div', relatedPos) : -1;
+    if (insertBefore > 0) {
+      finalHtml = finalHtml.slice(0, insertBefore) + authorBioHtml + '\n' + finalHtml.slice(insertBefore);
+    } else {
+      finalHtml += '\n' + authorBioHtml;
+    }
+  }
+
+  // ── 마지막 업데이트 날짜 ──
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}년 ${now.getMonth() + 1}월 ${now.getDate()}일`;
+  const isoDate = now.toISOString().split('T')[0];
+  finalHtml += `\n<p class="last-updated" style="color:#888;font-size:0.85em;margin-top:2em;text-align:right;">마지막 업데이트: <time datetime="${isoDate}">${dateStr}</time></p>`;
+
   // ── FAQPage JSON-LD ──
   if (article.faqSchema && article.faqSchema.length > 0) {
     const faqJsonLd = {
@@ -396,8 +432,8 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
       ...(site.persona?.concern ? { "knowsAbout": site.persona.concern } : {}),
       ...(site.persona?.bio ? { "description": site.persona.bio } : {}),
     },
-    "datePublished": new Date().toISOString(),
-    "dateModified": new Date().toISOString(),
+    "datePublished": now.toISOString(),
+    "dateModified": now.toISOString(),
     "publisher": {
       "@type": "Organization",
       "name": site.title,
@@ -468,6 +504,69 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
   }
 
   return finalHtml;
+}
+
+/**
+ * 목차 (Table of Contents) - H2 태그 기반 자동 생성
+ */
+function buildTableOfContents(html: string): string {
+  const $ = cheerio.load(html, null, false);
+  const headings: Array<{ text: string; id: string }> = [];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  $("h2").each((_: number, el: any) => {
+    const text = $(el).text().trim();
+    if (!text) return;
+    // Q&A/FAQ 섹션은 목차에서 제외 (본문 마지막에 위치하므로)
+    if (/Q&A|FAQ|자주 묻는/i.test(text)) return;
+
+    const id = text
+      .replace(/[^\w가-힣\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .toLowerCase()
+      .slice(0, 50);
+
+    // H2에 id 속성 추가 (앵커 링크용)
+    $(el).attr("id", id);
+    headings.push({ text, id });
+  });
+
+  if (headings.length < 3) return ""; // H2가 3개 미만이면 목차 불필요
+
+  const tocItems = headings
+    .map(h => `<li><a href="#${h.id}" style="color:#3498db;text-decoration:none;">${h.text}</a></li>`)
+    .join("\n");
+
+  return `<nav class="toc-box" style="background:#f0f4f8;border:1px solid #dde3ea;padding:16px 20px;margin:20px 0;border-radius:10px;">
+<strong style="display:block;margin-bottom:8px;font-size:1.05em;">📑 목차</strong>
+<ol style="margin:0;padding-left:20px;line-height:1.8;">${tocItems}</ol>
+</nav>`;
+}
+
+/**
+ * 작성자 소개 박스 (Author Bio) - E-E-A-T 강화
+ */
+function buildAuthorBioHtml(site: SiteCredential): string {
+  const persona = site.persona;
+  if (!persona?.name) return "";
+
+  const name = persona.name;
+  const expertise = persona.expertise || "";
+  const bio = persona.bio || "";
+  const concern = persona.concern || "";
+
+  const infoLines: string[] = [];
+  if (expertise) infoLines.push(`<strong>전문 분야</strong>: ${expertise}`);
+  if (concern) infoLines.push(`<strong>관심사</strong>: ${concern}`);
+
+  return `<div class="author-bio" style="display:flex;gap:16px;align-items:flex-start;background:#f8f9fa;border:1px solid #e0e4e8;padding:20px;margin:2em 0;border-radius:12px;">
+<div style="flex-shrink:0;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2);display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.4em;font-weight:bold;">${name.charAt(0)}</div>
+<div>
+<strong style="font-size:1.05em;">${name}</strong>
+${bio ? `<p style="margin:6px 0 4px;color:#555;font-size:0.92em;">${bio}</p>` : ""}
+${infoLines.length > 0 ? `<p style="margin:4px 0 0;color:#777;font-size:0.85em;">${infoLines.join(" · ")}</p>` : ""}
+</div>
+</div>`;
 }
 
 /**
