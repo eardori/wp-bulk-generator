@@ -86,6 +86,29 @@ type ReaderLens = {
   narrativeAngle: string;
 };
 
+// ── Content Strategy Types ──────────────────────────────────────────────────
+
+type ContentStrategy = {
+  name: string;
+  description?: string;
+  toneOverride?: string;
+  targetKeywords?: string[];
+  semanticKeywords?: string[];
+  keywordOptimization?: {
+    titleRule?: string;
+    introRule?: string;
+    h2Rule?: string;
+  };
+  htmlStructureRules?: {
+    useBulletPoints?: string;
+    endingSection?: string;
+  };
+  coreNarratives?: Array<{
+    label: string;
+    content: string;
+  }>;
+};
+
 // ── AEO Types ───────────────────────────────────────────────────────────────
 
 type AeoBusinessType = "restaurant" | "cafe" | "dermatology" | "beauty_salon" | "academy" | "fitness" | "dental";
@@ -1129,6 +1152,45 @@ JSON 형식으로 응답하세요:
 
 // ── Gemini call ──────────────────────────────────────────────────────────────
 
+function buildContentStrategyBlock(contentStrategy: ContentStrategy, articleVariation: number): string {
+  const selectedKeyword = contentStrategy.targetKeywords && contentStrategy.targetKeywords.length > 0
+    ? contentStrategy.targetKeywords[articleVariation % contentStrategy.targetKeywords.length]
+    : null;
+
+  let block = `\n\n## SEO 콘텐츠 전략 (반드시 준수):\n`;
+
+  if (selectedKeyword) {
+    block += `\n### 이번 글의 타겟 키워드: "${selectedKeyword}"\n`;
+    if (contentStrategy.keywordOptimization) {
+      const ko = contentStrategy.keywordOptimization;
+      if (ko.titleRule) block += `- 제목: ${ko.titleRule}\n`;
+      if (ko.introRule) block += `- 도입부: ${ko.introRule}\n`;
+      if (ko.h2Rule) block += `- H2: ${ko.h2Rule}\n`;
+    }
+  }
+
+  if (contentStrategy.semanticKeywords && contentStrategy.semanticKeywords.length > 0) {
+    block += `\n### 시맨틱 키워드 (본문 전체에 문맥에 맞게 자연스럽게 분산 배치):\n`;
+    block += contentStrategy.semanticKeywords.join(", ") + "\n";
+  }
+
+  if (contentStrategy.coreNarratives && contentStrategy.coreNarratives.length > 0) {
+    block += `\n### 반드시 포함할 핵심 경험담:\n`;
+    contentStrategy.coreNarratives.forEach((n, i) => {
+      block += `${i + 1}. [${n.label}] ${n.content}\n`;
+    });
+  }
+
+  if (contentStrategy.htmlStructureRules) {
+    const hr = contentStrategy.htmlStructureRules;
+    block += `\n### 추가 HTML 구조 규칙:\n`;
+    if (hr.useBulletPoints) block += `- ${hr.useBulletPoints}\n`;
+    if (hr.endingSection) block += `- ${hr.endingSection}\n`;
+  }
+
+  return block;
+}
+
 async function generateForSite(
   apiKey: string,
   product: ScrapedProduct,
@@ -1138,6 +1200,7 @@ async function generateForSite(
   articleVariation = 0,
   siteArticleIndex = 0,
   aeoConfig?: AeoConfig,
+  contentStrategy?: ContentStrategy,
 ): Promise<GeneratedArticle> {
   const persona = normalizePersona(site);
   const sourceTitle = product.title?.trim() || site.title || site.slug;
@@ -1145,6 +1208,13 @@ async function generateForSite(
   const promptSummary = summarizeContentPrompt(normalizedPrompt);
   const isRestaurant = product.source === "naver-place";
   const readerLens = pickReaderLens(isRestaurant, articleVariation);
+  // Content Strategy: 톤 오버라이드 적용
+  const effectiveTone = contentStrategy?.toneOverride
+    ? `${contentStrategy.toneOverride} (페르소나 특성을 유지하면서)`
+    : persona.tone;
+
+  const strategyBlock = contentStrategy ? buildContentStrategyBlock(contentStrategy, articleVariation) : "";
+
   const promptInstructionBlock = `## 사용자 작성 프롬프트 (반드시 반영):
 ${normalizedPrompt}
 
@@ -1155,7 +1225,7 @@ ${normalizedPrompt}
 - 사용자가 "다양한 페르소나", "각기 다른 관점"을 요구한 경우 이번 글은 아래 독자 렌즈를 우선 적용할 것:
   - 독자 렌즈: ${readerLens.label}
   - 적용 지시: ${readerLens.instruction}
-  - 서술 각도: ${readerLens.narrativeAngle}`;
+  - 서술 각도: ${readerLens.narrativeAngle}${strategyBlock}`;
 
   const specsSummary =
     Object.keys(product.specs).length > 0
@@ -1495,7 +1565,7 @@ ${normalizedPrompt}
     ].filter(Boolean).join("\n");
 
     const restaurantPrompt = `당신은 "${persona.name}"입니다. ${persona.bio || ""}
-나이: ${persona.age}세 | 글쓰기 톤: ${persona.tone}
+나이: ${persona.age}세 | 글쓰기 톤: ${effectiveTone}
 ${variationHint}
 
 아래 사용자 프롬프트를 가장 우선으로 보고, 참고 후기 원문에서 직접 확인되는 사실만 보조 근거로 사용해 실제 블로그에 바로 올릴 수 있는 맛집 글을 작성하세요.
@@ -1794,6 +1864,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
       limit,
       globalTotal,
       aeoConfig,
+      contentStrategy,
     } = req.body as {
       product: ScrapedProduct;
       contentPrompt: string;
@@ -1803,6 +1874,7 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
       limit?: number;
       globalTotal?: number;
       aeoConfig?: AeoConfig;
+      contentStrategy?: ContentStrategy;
     };
 
     if (!product || !contentPrompt?.trim() || !siteConfigs?.length) {
@@ -1870,7 +1942,8 @@ export async function generateArticlesRoutes(app: FastifyInstance) {
                   reviewCollection,
                   diversityIndex,
                   siteArticleIndex,
-                  aeoConfig
+                  aeoConfig,
+                  contentStrategy
                 );
               } catch (err) {
                 lastErr = err instanceof Error ? err : new Error(String(err));

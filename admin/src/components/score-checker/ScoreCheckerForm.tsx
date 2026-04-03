@@ -138,10 +138,10 @@ export default function ScoreCheckerForm({ onStartDiagnosis }: ScoreCheckerFormP
         <p className="text-xs text-gray-500 mb-3">진단 항목 (100점 만점)</p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { label: "구조화 데이터", score: 30, icon: "🔧", color: "violet" },
-            { label: "콘텐츠 품질", score: 30, icon: "📝", color: "cyan" },
-            { label: "엔티티 존재감", score: 25, icon: "🌐", color: "amber" },
-            { label: "권위성 신호", score: 15, icon: "⭐", color: "emerald" },
+            { label: "엔티티 권위성", score: 30, icon: "⭐", color: "emerald" },
+            { label: "플랫폼 존재감", score: 25, icon: "🌐", color: "amber" },
+            { label: "웹사이트 최적화", score: 25, icon: "🔧", color: "violet" },
+            { label: "AI 접근성", score: 20, icon: "🤖", color: "cyan" },
           ].map((cat) => (
             <div
               key={cat.label}
