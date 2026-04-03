@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useSessionPersist } from "@/hooks/useSessionPersist";
 import { bridgeSSE, readSSEStream } from "@/lib/bridge-sse";
 import type {
   ContentStep,
@@ -39,6 +40,60 @@ export default function ContentPage() {
   // 이어서 생성을 위한 저장 상태
   const [savedSiteConfigs, setSavedSiteConfigs] = useState<{ site: SiteCredential; count: number }[]>([]);
   const [savedTotalArticles, setSavedTotalArticles] = useState(0);
+
+  // ── sessionStorage 상태 보존 ──
+  const persistState = useMemo(
+    () => ({
+      step: step === "generating" || step === "publishing" ? step : step,
+      articles,
+      log: log.slice(-100),
+      genProgress,
+      pubProgress,
+      product,
+      contentPrompt,
+      selectedSites,
+      savedSiteConfigs,
+      savedTotalArticles,
+    }),
+    [step, articles, log, genProgress, pubProgress, product, contentPrompt, selectedSites, savedSiteConfigs, savedTotalArticles]
+  );
+
+  const isWorking =
+    step === "generating" || step === "publishing" || step === "scraping" || step === "fetching-reviews";
+
+  const isIdle = step === "input";
+
+  const handleRestoreState = useCallback(
+    (saved: typeof persistState) => {
+      if (saved.articles?.length > 0) {
+        setArticles(saved.articles);
+        // 진행 중이었던 상태 → preview로 복원 (SSE 재연결 불가)
+        const restoredStep = saved.step === "generating" ? "preview"
+          : saved.step === "publishing" ? "done"
+          : saved.step;
+        setStep(restoredStep as ContentStep);
+      } else if (saved.step && saved.step !== "input") {
+        setStep(saved.step as ContentStep);
+      }
+      if (saved.log?.length > 0) setLog(saved.log);
+      if (saved.genProgress) setGenProgress(saved.genProgress);
+      if (saved.pubProgress) setPubProgress(saved.pubProgress);
+      if (saved.product) setProduct(saved.product);
+      if (saved.contentPrompt) setContentPrompt(saved.contentPrompt);
+      if (saved.selectedSites?.length > 0) setSelectedSites(saved.selectedSites);
+      if (saved.savedSiteConfigs?.length > 0) setSavedSiteConfigs(saved.savedSiteConfigs);
+      if (saved.savedTotalArticles) setSavedTotalArticles(saved.savedTotalArticles);
+    },
+    []
+  );
+
+  const { clearSaved } = useSessionPersist({
+    key: "content",
+    state: persistState,
+    onRestore: handleRestoreState,
+    isWorking,
+    isIdle,
+  });
 
   // Step 1 → 2: Scrape product
   const handleScrape = async (url: string, prompt: string, aeo?: AeoConfig) => {
@@ -391,6 +446,7 @@ export default function ContentPage() {
     setSavedSiteConfigs([]);
     setSavedTotalArticles(0);
     setAeoConfig(null);
+    clearSaved();
   };
 
   // Step indicator

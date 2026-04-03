@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSessionPersist } from "@/hooks/useSessionPersist";
 import { bridgeSSE, readSSEStream } from "@/lib/bridge-sse";
 import SiteGeneratorForm, {
   type SiteGenerationRequest,
@@ -109,6 +110,50 @@ export default function Home() {
   );
   const generationAbortRef = useRef<AbortController | null>(null);
   const generationRunIdRef = useRef(0);
+
+  // ── sessionStorage 상태 보존 ──
+  const persistState = useMemo(
+    () => ({
+      deployStatus,
+      configs,
+      generation: {
+        ...generation,
+        // 복원 시 generating → previewing으로 전환 (SSE 재연결 불가)
+        status: generation.status === "generating" ? "previewing" : generation.status,
+      },
+    }),
+    [deployStatus, configs, generation]
+  );
+
+  const isWorking =
+    generation.status === "generating" ||
+    deployStatus.status === "deploying";
+
+  const isIdle =
+    generation.status === "idle" && deployStatus.status === "idle";
+
+  const handleRestore = useCallback(
+    (saved: typeof persistState) => {
+      if (saved.configs?.length > 0) {
+        setConfigs(saved.configs);
+      }
+      if (saved.deployStatus) {
+        setDeployStatus(saved.deployStatus);
+      }
+      if (saved.generation) {
+        setGeneration(saved.generation as GenerationState);
+      }
+    },
+    []
+  );
+
+  const { clearSaved } = useSessionPersist({
+    key: "deploy",
+    state: persistState,
+    onRestore: handleRestore,
+    isWorking,
+    isIdle,
+  });
 
   useEffect(() => {
     if (pendingConfigs.length === 0) return;
@@ -340,6 +385,7 @@ export default function Home() {
     setFormError("");
     setGeneration(createInitialGenerationState());
     setDeployStatus(createInitialDeployStatus());
+    clearSaved();
   };
 
   const isGenerating = generation.status === "generating";

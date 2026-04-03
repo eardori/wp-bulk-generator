@@ -12,6 +12,11 @@ import {
   submitBingUrls,
 } from "../lib/bing-webmaster.js";
 import {
+  isIndexNowEnabled,
+  submitIndexNow,
+  getIndexNowApiKey,
+} from "../lib/indexnow.js";
+import {
   getSiteDirForTarget,
   isRemoteTarget,
   resolveSiteTarget,
@@ -986,6 +991,44 @@ async function warmPublishedUrls(baseUrl: string, postUrl: string): Promise<void
     })
   );
 }
+// ── IndexNow key file deployment ─────────────────────────────────────────────
+
+async function deployIndexNowKeyFile(site: SiteCredential): Promise<void> {
+  const apiKey = getIndexNowApiKey();
+  if (!apiKey) return;
+
+  try {
+    const target = resolveSiteTarget(site);
+    const siteDir = getLocalSiteDir(site);
+    const keyFileName = `${apiKey}.txt`;
+    const keyFileContent = apiKey;
+
+    if (!isRemoteTarget(target) && existsSync(`${siteDir}/wp-config.php`)) {
+      writeFileSync(`${siteDir}/${keyFileName}`, keyFileContent);
+      return;
+    }
+
+    if (isRemoteTarget(target)) {
+      const tempDir = mkdtempSync(join(tmpdir(), "wpbulk-indexnow-"));
+      const localKeyPath = join(tempDir, keyFileName);
+
+      try {
+        writeFileSync(localKeyPath, keyFileContent);
+        const remoteTmpPath = `/tmp/${keyFileName}`;
+        scpToTarget(target, localKeyPath, remoteTmpPath, 15000);
+        execSsh(
+          target,
+          `sudo cp ${shellQuote(remoteTmpPath)} ${shellQuote(`${siteDir}/${keyFileName}`)} && sudo chown www-data:www-data ${shellQuote(`${siteDir}/${keyFileName}`)} && rm -f ${shellQuote(remoteTmpPath)}`,
+          15000
+        );
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+  } catch {
+    // best-effort
+  }
+}
 
 // ── Route ────────────────────────────────────────────────────────────────────
 
@@ -1066,6 +1109,30 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
               });
             }
           }
+          // IndexNow — 즉시 색인 요청 (Bing, Yandex, Naver 등)
+          if (isIndexNowEnabled()) {
+            try {
+              const host = new URL(result.postUrl).host;
+              const indexNowResult = await submitIndexNow([result.postUrl], host);
+              if (indexNowResult.success) {
+                send({
+                  type: "progress",
+                  articleId: article.id,
+                  siteSlug: article.siteSlug,
+                  message: `IndexNow 색인 요청 완료 (${indexNowResult.statusCode})`,
+                });
+              } else if (indexNowResult.error) {
+                send({
+                  type: "progress",
+                  articleId: article.id,
+                  siteSlug: article.siteSlug,
+                  message: `IndexNow 경고: ${indexNowResult.error}`,
+                });
+              }
+            } catch {
+              // IndexNow is best-effort, don't block publish
+            }
+          }
           send({
             type: "published",
             articleId: article.id,
@@ -1084,13 +1151,16 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
         }
       }
 
-      // 발행 완료 후 각 사이트의 llms.txt 갱신
+      // 발행 완료 후 각 사이트의 llms.txt 갱신 + IndexNow 키 파일 배포
       const updatedSites = new Set<string>();
       for (const a of articles) {
         if (!updatedSites.has(a.siteSlug)) {
           const site = siteMap.get(a.siteSlug);
           if (site) {
             await updateLlmsTxt(site);
+            if (isIndexNowEnabled()) {
+              await deployIndexNowKeyFile(site);
+            }
             updatedSites.add(a.siteSlug);
           }
         }
