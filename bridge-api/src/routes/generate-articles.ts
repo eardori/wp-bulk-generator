@@ -1090,6 +1090,7 @@ ${placeHasReviewImages ? '11) 사진이 있는 리뷰는 본문 내 적절한 �
 - 콜키지가 확실하지 않으면 콜키지 질문 자체를 만들지 마세요.
 - 외국인 응대 정보가 없으면 관련 문장 자체를 만들지 마세요.
 - JSON-LD에서도 입력값에 없는 필드는 해당 키를 통째로 생략하세요.
+- 총 본문 분량은 3500~5000자를 목표로 하세요. 각 H2 섹션을 충분히 깊이 있게 서술하고, 단순 나열이 아닌 경험 기반의 풍부한 설명을 포함하세요.
 
 ---
 
@@ -1481,7 +1482,7 @@ ${normalizedPrompt}
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [{ text: aeoPrompt }] }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0.9, maxOutputTokens: 8192 },
+          generationConfig: { responseMimeType: "application/json", temperature: 0.9, maxOutputTokens: 16384 },
         }),
       }
     );
@@ -1597,7 +1598,7 @@ ${promptInstructionBlock}
 7. 장단점을 균형있게 서술 (단점 없으면 광고로 보임 → 신뢰도 하락)
 8. 주소, 영업시간, 전화번호, 대표메뉴, 가격대 같은 운영 정보는 사용자 프롬프트에 있으면 그대로 쓰고, 프롬프트에 없더라도 보조 참고용 스크랩 정보가 있을 때만 선택적으로 사용할 것
 9. Q&A(FAQ)는 사용자 프롬프트에서 중요하게 다룬 정보 위주로 4~6개 작성하고, 없는 항목을 억지로 채우지 말 것. 실제 방문자가 궁금해할 질문 위주로
-10. 2000~3000자 분량
+10. 3500~5000자 분량 (초기 컨텐츠 수준의 풍부한 내용 필수)
 11. HTML 형식 (h2, h3, p, ul, li, strong, em, table 태그)
 12. 마지막 정보 정리 <table>은 사용자 프롬프트나 후기 원문에 실제로 들어 있는 항목만 넣고, 빈 행이나 "정보 없음" 행은 만들지 말 것
 13. 후기 원문과 프롬프트에 없는 내용은 만들지 말 것. 다만 사용자 프롬프트에 명시된 정보는 사실값으로 취급하고 그대로 반영할 것
@@ -1637,7 +1638,7 @@ JSON 형식으로 응답하세요:
     const data = await requestGeminiContent(apiKey, restaurantPrompt, {
       responseMimeType: "application/json",
       temperature: 0.95,
-      maxOutputTokens: 8192,
+      maxOutputTokens: 16384,
     });
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("AI 응답이 비어있습니다.");
@@ -1728,7 +1729,7 @@ ${promptInstructionBlock}
 	7. ${reviewRule7}
 	8. 본문 내 구체적 수치 필수: ${numericRule}
 	9. Q&A(FAQ) 섹션 포함: 타겟 질문 기반 + 추가 질문 4~6개 (총 5~7개). 실제 구매자가 궁금해할 질문 위주로, 확인된 정보만 답변
-	10. 2000~3000자 분량 (AI 인용 가능성은 길이와 비례)
+	10. 3500~5000자 분량 (초기 컨텐츠 수준의 풍부한 내용 필수, AI 인용 가능성은 길이와 비례)
 	11. 제품의 장단점을 균형있게 서술 (E-E-A-T 신뢰도 확보 — 단점 없으면 광고로 인식)
 	12. HTML 형식으로 작성 (h2, h3, p, ul, li, strong, em, table 태그 사용)
 	13. <h2> 사용법 섹션에는 <ol> 단계별 리스트 필수 (HowTo 구조). 각 <li>는 구체적인 행동 단계를 포함할 것
@@ -1769,7 +1770,7 @@ JSON 형식으로 응답하세요:
   const data = await requestGeminiContent(apiKey, prompt, {
     responseMimeType: "application/json",
     temperature: 0.9,
-    maxOutputTokens: 8192,
+    maxOutputTokens: 16384,
   });
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("AI 응답이 비어있습니다.");
