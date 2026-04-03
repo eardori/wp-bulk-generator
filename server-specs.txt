@@ -1,0 +1,17 @@
+=== CPU ===
+2
+Model name:                              AMD EPYC 7B13
+=== RAM ===
+               total        used        free      shared  buff/cache   available
+Mem:           7.8Gi       1.5Gi       454Mi       129Mi       6.2Gi       6.3Gi
+=== DISK ===
+/dev/sda1        49G   19G   28G  41% /
+=== SITES ===
+105
+=== LOAD ===
+ 14:46:14 up 19 days,  7:49,  0 user,  load average: 0.25, 0.20, 0.23
+=== PHP/NGINX ===
+PHP 8.2.30 (cli) (built: Feb 28 2026 07:07:34) (NTS)
+/tmp/check-server.sh: line 15: nginx: command not found
+=== MYSQL ===
+mysql  Ver 15.1 Distrib 10.11.14-MariaDB, for debian-linux-gnu (x86_64) using  EditLine wrapper

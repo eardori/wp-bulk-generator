@@ -1,0 +1,262 @@
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
+import { dirname } from "path";
+import { isExcludedSiteRecord } from "../lib/excluded-sites.js";
+import { removeDashboardSiteCaches } from "../lib/dashboard-cache.js";
+import { getPrimaryServerTarget, getSecondaryServerTarget, } from "../lib/server-targets.js";
+import { execSsh, shellQuote } from "../lib/ssh.js";
+const CREDS_PATH = process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
+const CONFIG_PATH = process.env.CONFIG_PATH || "/root/wp-sites-config.json";
+const GROUPS_PATH = process.env.GROUPS_PATH || "/root/site-groups.json";
+const CREDENTIAL_MIRROR_PATHS = [
+    "/root/wp-sites-credentials.json",
+    "/home/ubuntu/wp-bulk-generator/bridge-api/data/wp-sites-credentials.json",
+    "/home/ubuntu/wp-bulk-generator/admin/.cache/sites-credentials.json",
+    "/home/ubuntu/wp-bridge-api/data/wp-sites-credentials.json",
+];
+const CONFIG_MIRROR_PATHS = [
+    "/root/wp-sites-config.json",
+    "/home/ubuntu/wp-bulk-generator/bridge-api/data/wp-sites-config.json",
+    "/home/ubuntu/wp-bulk-generator/admin/.cache/sites-config.json",
+    "/home/ubuntu/wp-bridge-api/data/wp-sites-config.json",
+];
+const GROUP_MIRROR_PATHS = [
+    "/root/site-groups.json",
+    "/home/ubuntu/wp-bulk-generator/bridge-api/data/site-groups.json",
+    "/home/ubuntu/wp-bridge-api/data/site-groups.json",
+];
+function tryReadJson(path) {
+    try {
+        if (!existsSync(path))
+            return [];
+        return JSON.parse(readFileSync(path, "utf-8"));
+    }
+    catch {
+        return [];
+    }
+}
+function normalizeRecords(input, nestedKey) {
+    if (Array.isArray(input)) {
+        return input;
+    }
+    if (nestedKey &&
+        input &&
+        typeof input === "object" &&
+        Array.isArray(input[nestedKey])) {
+        return input[nestedKey];
+    }
+    return [];
+}
+function writeJson(path, data) {
+    const dir = dirname(path);
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(path, JSON.stringify(data, null, 2));
+}
+function normalizeText(value) {
+    return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+function uniquePaths(primary, mirrors) {
+    return Array.from(new Set([primary, ...mirrors].filter(Boolean)));
+}
+function tryReadRemoteJson(path) {
+    const secondary = getSecondaryServerTarget();
+    if (!secondary) {
+        return [];
+    }
+    try {
+        const raw = execSsh(secondary, `[ -f ${shellQuote(path)} ] && cat ${shellQuote(path)} || printf '[]'`, 15000);
+        return JSON.parse(raw || "[]");
+    }
+    catch {
+        return [];
+    }
+}
+function resolveServerIdentity(record, fallback) {
+    return {
+        server_id: typeof record.server_id === "string" && record.server_id.trim()
+            ? record.server_id.trim()
+            : fallback.id,
+        server_host: typeof record.server_host === "string" && record.server_host.trim()
+            ? record.server_host.trim()
+            : fallback.host || "",
+        server_user: typeof record.server_user === "string" && record.server_user.trim()
+            ? record.server_user.trim()
+            : fallback.user || "",
+    };
+}
+function recordKey(record) {
+    const slug = normalizeText(record.slug ?? record.site_slug);
+    const domain = normalizeText(record.domain);
+    return slug || domain || JSON.stringify(record);
+}
+function mergeByRecordKey(records) {
+    const merged = new Map();
+    for (const record of records) {
+        const key = recordKey(record);
+        if (!key)
+            continue;
+        const prev = merged.get(key) || {};
+        merged.set(key, {
+            ...prev,
+            ...record,
+        });
+    }
+    return Array.from(merged.values());
+}
+export async function credentialsRoutes(app) {
+    // 사이트 자격증명 + 페르소나 병합
+    app.get("/credentials", async () => {
+        const primary = getPrimaryServerTarget();
+        const secondary = getSecondaryServerTarget();
+        const credentials = mergeByRecordKey([
+            ...normalizeRecords(tryReadJson(CREDS_PATH), "sites").map((record) => ({
+                ...record,
+                ...resolveServerIdentity(record, primary),
+            })),
+            ...(secondary
+                ? normalizeRecords(tryReadRemoteJson(secondary.credentialsPath), "sites").map((record) => ({
+                    ...record,
+                    ...resolveServerIdentity(record, secondary),
+                }))
+                : []),
+        ]);
+        const configs = mergeByRecordKey([
+            ...normalizeRecords(tryReadJson(CONFIG_PATH), "configs").map((record) => ({
+                ...record,
+                ...resolveServerIdentity(record, primary),
+            })),
+            ...(secondary
+                ? normalizeRecords(tryReadRemoteJson(secondary.configPath), "configs").map((record) => ({
+                    ...record,
+                    ...resolveServerIdentity(record, secondary),
+                }))
+                : []),
+        ]);
+        const configMap = new Map();
+        for (const c of configs) {
+            const key = recordKey(c);
+            if (key)
+                configMap.set(key, c);
+        }
+        const merged = credentials.map((cred) => {
+            const config = configMap.get(recordKey(cred));
+            return {
+                ...cred,
+                persona: config?.persona || null,
+                categories: config?.categories || [],
+            };
+        }).filter((cred) => !isExcludedSiteRecord(cred));
+        return { sites: merged };
+    });
+    // 사이트 설정만 반환
+    app.get("/credentials/config", async () => {
+        const primary = getPrimaryServerTarget();
+        const secondary = getSecondaryServerTarget();
+        const configs = mergeByRecordKey([
+            ...normalizeRecords(tryReadJson(CONFIG_PATH), "configs").map((record) => ({
+                ...record,
+                ...resolveServerIdentity(record, primary),
+            })),
+            ...(secondary
+                ? normalizeRecords(tryReadRemoteJson(secondary.configPath), "configs").map((record) => ({
+                    ...record,
+                    ...resolveServerIdentity(record, secondary),
+                }))
+                : []),
+        ]).filter((config) => !isExcludedSiteRecord(config));
+        return { configs };
+    });
+    // 사이트 credentials/config/groups 정리
+    app.post("/credentials/delete-sites", async (req, reply) => {
+        const body = (req.body || {});
+        const slugSet = new Set((Array.isArray(body.slugs) ? body.slugs : [])
+            .map((slug) => normalizeText(slug))
+            .filter(Boolean));
+        const domainSet = new Set((Array.isArray(body.domains) ? body.domains : [])
+            .map((domain) => normalizeText(domain))
+            .filter(Boolean));
+        if (slugSet.size === 0 && domainSet.size === 0) {
+            reply.code(400).send({ error: "slugs 또는 domains가 필요합니다." });
+            return;
+        }
+        const shouldDelete = (item) => {
+            const slug = normalizeText(item.slug ?? item.site_slug);
+            const domain = normalizeText(item.domain);
+            return slugSet.has(slug) || domainSet.has(domain);
+        };
+        let deletedCredentials = 0;
+        let deletedConfigs = 0;
+        let deletedGroups = 0;
+        let remainingCredentials = 0;
+        let remainingConfigs = 0;
+        let remainingGroups = 0;
+        const deletedSlugs = new Set();
+        for (const path of uniquePaths(CREDS_PATH, CREDENTIAL_MIRROR_PATHS)) {
+            const credentials = normalizeRecords(tryReadJson(path), "sites");
+            const removedCredentials = credentials.filter((item) => shouldDelete(item));
+            const nextCredentials = credentials.filter((item) => !shouldDelete(item));
+            for (const item of removedCredentials) {
+                const slug = normalizeText(item.slug ?? item.site_slug);
+                if (slug) {
+                    deletedSlugs.add(slug);
+                }
+            }
+            remainingCredentials = Math.max(remainingCredentials, nextCredentials.length);
+            deletedCredentials = Math.max(deletedCredentials, credentials.length - nextCredentials.length);
+            if (nextCredentials.length !== credentials.length) {
+                writeJson(path, nextCredentials);
+            }
+        }
+        for (const path of uniquePaths(CONFIG_PATH, CONFIG_MIRROR_PATHS)) {
+            const configs = normalizeRecords(tryReadJson(path), "configs");
+            const removedConfigs = configs.filter((item) => shouldDelete(item));
+            const nextConfigs = configs.filter((item) => !shouldDelete(item));
+            for (const item of removedConfigs) {
+                const slug = normalizeText(item.slug ?? item.site_slug);
+                if (slug) {
+                    deletedSlugs.add(slug);
+                }
+            }
+            remainingConfigs = Math.max(remainingConfigs, nextConfigs.length);
+            deletedConfigs = Math.max(deletedConfigs, configs.length - nextConfigs.length);
+            if (nextConfigs.length !== configs.length) {
+                writeJson(path, nextConfigs);
+            }
+        }
+        for (const path of uniquePaths(GROUPS_PATH, GROUP_MIRROR_PATHS)) {
+            const groups = normalizeRecords(tryReadJson(path), "groups");
+            const nextGroups = groups
+                .map((group) => {
+                const slugs = Array.isArray(group.slugs)
+                    ? group.slugs.map((slug) => normalizeText(slug))
+                    : [];
+                return {
+                    ...group,
+                    slugs: slugs.filter((slug) => !slugSet.has(slug)),
+                };
+            })
+                .filter((group) => Array.isArray(group.slugs) && group.slugs.length > 0);
+            remainingGroups = Math.max(remainingGroups, nextGroups.length);
+            deletedGroups = Math.max(deletedGroups, groups.length - nextGroups.length);
+            if (nextGroups.length !== groups.length) {
+                writeJson(path, nextGroups);
+            }
+        }
+        await removeDashboardSiteCaches(Array.from(deletedSlugs));
+        return {
+            success: true,
+            deleted: {
+                credentials: deletedCredentials,
+                configs: deletedConfigs,
+                groups: deletedGroups,
+            },
+            remaining: {
+                credentials: remainingCredentials,
+                configs: remainingConfigs,
+                groups: remainingGroups,
+            },
+        };
+    });
+}
+//# sourceMappingURL=credentials.js.map

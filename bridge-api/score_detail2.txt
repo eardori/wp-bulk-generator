@@ -1,0 +1,38 @@
+TOTAL_SCORE=3
+GRADE=D
+HAS_WEBSITE=true
+WEBSITE_URL=https://www.bongpiyang.co.kr
+CRAWL_FAILED=true
+CRAWL_ERROR=웹사이트 주소(https://www.bongpiyang.co.kr)를 찾을 수 없습니다.
+--- DISCOVERY SOURCES ---
+  구글 검색 실패 (타임아웃)
+  네이버 검색 실패 (타임아웃)
+  Gemini 추천 웹사이트: https://www.bongpiyang.co.kr
+  주소 자동 수집: 서울 송파구 위례성대로 12
+--- CATEGORIES ---
+0/40 엔티티 권위성
+  fail 0/10 네이버 플레이스 리뷰 수 | 네이버 플레이스에 먼저 등록하고, 방문자 리뷰를 수집하세요.
+  fail 0/10 구글 리뷰 수 + 평점 | 구글 비즈니스 프로필(GBP)에 등록하고 리뷰를 수집하세요. 글로벌 AI 추천의 핵심입니다.
+  fail 0/10 네이버 블로그 언급 수 | 네이버 블로그에서 업체 관련 언급이 없습니다. 블로그 마케팅을 시작하세요.
+  fail 0/5 뉴스/미디어 노출 | 뉴스/미디어 노출이 없습니다. 보도자료 배포나 미디어 인터뷰를 통해 권위성을 높이세요.
+  fail 0/5 SNS 멘션 | 인스타그램, 페이스북 등 SNS 채널을 활용하여 브랜드 인지도를 높이세요.
+3/30 플랫폼 존재감
+  fail 0/8 네이버 플레이스 등록 | 네이버 플레이스에 업체를 등록하세요. 한국 AI 엔진 추천의 핵심 데이터 소스입니다.
+  fail 0/8 구글 비즈니스 프로필 | 구글 비즈니스 프로필(GBP)에 등록하세요. 글로벌 AI 노출에 필수입니다.
+  fail 0/4 카카오맵 등록 | 카카오맵에 업체를 등록하세요. 카카오 생태계 AI 노출에 도움됩니다.
+  fail 0/4 업종 디렉토리 등록 (다이닝코드, 식신 등) | 다이닝코드, 식신, 망고플레이트 등 업종 디렉토리에 등록하세요.
+  pass 3/3 공식 웹사이트 보유 | 공식 웹사이트: https://www.bongpiyang.co.kr
+  fail 0/3 SNS 프로필 존재 | 인스타그램, 페이스북 공식 계정을 개설하세요.
+0/20 웹사이트 최적화
+  fail 0/5 LocalBusiness Schema 존재 | 웹사이트가 없어 진단 불가. 웹사이트를 제작하고 Schema + llms.txt를 설치하면 최대 30점을 추가 확보할 수 있습니다.
+  fail 0/2 업종별 세부 Schema 타입 | 웹사이트가 없어 진단 불가. 웹사이트를 제작하고 Schema + llms.txt를 설치하면 최대 30점을 추가 확보할 수 있습니다.
+  fail 0/3 FAQ 구조 존재 | 웹사이트가 없어 진단 불가. 웹사이트를 제작하고 Schema + llms.txt를 설치하면 최대 30점을 추가 확보할 수 있습니다.
+  fail 0/3 H1/H2 구조 + 엔티티 선언 | 웹사이트가 없어 진단 불가. 웹사이트를 제작하고 Schema + llms.txt를 설치하면 최대 30점을 추가 확보할 수 있습니다.
+  fail 0/2 메뉴/서비스 리스트 구조화 | 웹사이트가 없어 진단 불가. 웹사이트를 제작하고 Schema + llms.txt를 설치하면 최대 30점을 추가 확보할 수 있습니다.
+  fail 0/3 위치/영업시간/평점 Schema | 웹사이트가 없어 진단 불가. 웹사이트를 제작하고 Schema + llms.txt를 설치하면 최대 30점을 추가 확보할 수 있습니다.
+  fail 0/2 meta description | 웹사이트가 없어 진단 불가. 웹사이트를 제작하고 Schema + llms.txt를 설치하면 최대 30점을 추가 확보할 수 있습니다.
+0/10 AI 접근성
+  fail 0/3 robots.txt AI 크롤링 허용 | robots.txt 확인 실패.
+  fail 0/3 llms.txt 존재 | llms.txt 확인 실패.
+  fail 0/2 sitemap.xml 존재 | sitemap.xml 확인 실패.
+  fail 0/2 페이지 로딩 속도 | 페이지 응답 시간 초과.

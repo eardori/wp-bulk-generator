@@ -1,3 +1,4 @@
+import * as cheerio from "cheerio";
 import { execFileSync, execSync } from "child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import type { FastifyInstance } from "fastify";
@@ -357,10 +358,12 @@ async function probeRemoteWordPress(site: SiteCredential): Promise<{
 }
 
 function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replacedHtml: string): string {
-  const canonicalUrl = `${getSiteBaseUrl(site)}/${article.slug}/`;
+  const baseUrl = getSiteBaseUrl(site);
+  const canonicalUrl = `${baseUrl}/${article.slug}/`;
   const cleanedHtml = stripReviewReferenceMarkers(replacedHtml);
-  let finalHtml = cleanedHtml;
+  let finalHtml = enhanceFaqMicrodata(cleanedHtml);
 
+  // ── FAQPage JSON-LD ──
   if (article.faqSchema && article.faqSchema.length > 0) {
     const faqJsonLd = {
       "@context": "https://schema.org",
@@ -377,7 +380,9 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
     finalHtml += `\n<script type="application/ld+json">${JSON.stringify(faqJsonLd)}</script>`;
   }
 
-  const articleJsonLd = {
+  // ── Article JSON-LD (with author sameAs) ──
+  const authorUrl = `${baseUrl}/author/${(site.admin_user || "admin").toLowerCase()}/`;
+  const articleJsonLd: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "Article",
     "headline": article.title,
@@ -385,6 +390,8 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
     "author": {
       "@type": "Person",
       "name": site.persona?.name || site.admin_user,
+      "url": authorUrl,
+      "sameAs": [authorUrl],
       ...(site.persona?.expertise ? { "jobTitle": `${site.persona.expertise} 리뷰어` } : {}),
       ...(site.persona?.concern ? { "knowsAbout": site.persona.concern } : {}),
       ...(site.persona?.bio ? { "description": site.persona.bio } : {}),
@@ -394,16 +401,55 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
     "publisher": {
       "@type": "Organization",
       "name": site.title,
+      "url": baseUrl,
     },
     "speakable": {
       "@type": "SpeakableSpecification",
-      "cssSelector": [".summary-box", "h2"],
+      "cssSelector": [".summary-box", "h2", "h2 + p"],
+    },
+    "mainEntityOfPage": {
+      "@type": "WebPage",
+      "@id": canonicalUrl,
     },
     "url": canonicalUrl,
     ...(article.tags?.length > 0 ? { "keywords": article.tags.join(", ") } : {}),
   };
   finalHtml += `\n<script type="application/ld+json">${JSON.stringify(articleJsonLd)}</script>`;
 
+  // ── BreadcrumbList JSON-LD ──
+  const breadcrumbJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "position": 1,
+        "name": site.title || "홈",
+        "item": baseUrl,
+      },
+      ...(article.category ? [{
+        "@type": "ListItem",
+        "position": 2,
+        "name": article.category,
+        "item": `${baseUrl}/category/${encodeURIComponent(article.category)}/`,
+      }] : []),
+      {
+        "@type": "ListItem",
+        "position": article.category ? 3 : 2,
+        "name": article.title,
+        "item": canonicalUrl,
+      },
+    ],
+  };
+  finalHtml += `\n<script type="application/ld+json">${JSON.stringify(breadcrumbJsonLd)}</script>`;
+
+  // ── HowTo JSON-LD (auto-extract from <ol> lists) ──
+  const howToJsonLd = buildHowToSchema(cleanedHtml, article.title);
+  if (howToJsonLd) {
+    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(howToJsonLd)}</script>`;
+  }
+
+  // ── Business / Product Schema ──
   const businessJsonLd = buildBusinessSchemaFromHtml({
     title: article.title,
     excerpt: article.metaDescription || article.excerpt,
@@ -422,6 +468,106 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
   }
 
   return finalHtml;
+}
+
+/**
+ * HowTo JSON-LD: <h2>사용법</h2> 뒤의 <ol> → HowTo step 추출
+ */
+function buildHowToSchema(html: string, articleTitle: string): Record<string, unknown> | null {
+  const $ = cheerio.load(html, null, false);
+  let howToSteps: Array<{ name: string; text: string }> = [];
+  let howToName = "";
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  $("h2").each((_: number, h2El: any) => {
+    const h2Text = $(h2El).text().trim();
+    // "사용법", "사용 방법", "이용 방법", "사용 순서" 등 HowTo 패턴 탐지
+    if (!/(사용법|사용 방법|사용 순서|이용 방법|사용 팁|활용법|how\s*to)/i.test(h2Text)) return;
+
+    howToName = h2Text;
+    const ol = $(h2El).nextAll("ol").first();
+    if (ol.length === 0) return;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ol.find("li").each((idx: number, liEl: any) => {
+      const stepText = $(liEl).text().trim();
+      if (stepText) {
+        howToSteps.push({
+          name: `단계 ${idx + 1}`,
+          text: stepText,
+        });
+      }
+    });
+
+    if (howToSteps.length > 0) return false; // 첫 매칭으로 충분
+  });
+
+  if (howToSteps.length < 2) return null;
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "HowTo",
+    "name": howToName || `${articleTitle} 사용법`,
+    "step": howToSteps.map((step, idx) => ({
+      "@type": "HowToStep",
+      "position": idx + 1,
+      "name": step.name,
+      "text": step.text,
+    })),
+  };
+}
+
+/**
+ * FAQ 섹션의 <details><summary> 구조에 Schema.org microdata 속성 추가
+ * 이미 itemscope가 있으면 스킵
+ */
+function enhanceFaqMicrodata(html: string): string {
+  if (!html.includes("<details>") && !html.includes("<summary>")) return html;
+  if (html.includes('itemtype="https://schema.org/FAQPage"')) return html;
+
+  const $ = cheerio.load(html, null, false);
+
+  // FAQ 섹션 찾기 (h2에 "FAQ" 또는 "자주 묻는" 포함)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let faqSection: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  $("h2").each((_: number, h2El: any) => {
+    const text = $(h2El).text();
+    if (/FAQ|자주 묻는|질문/i.test(text)) {
+      faqSection = $(h2El);
+      return false;
+    }
+  });
+
+  if (!faqSection) return html;
+
+  // FAQ h2 다음의 details 요소들에 microdata 추가
+  const details = faqSection.nextAll("details");
+  if (details.length === 0) return html;
+
+  // FAQ 감싸는 div 생성
+  const faqWrapper = $(`<div itemscope itemtype="https://schema.org/FAQPage"></div>`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  details.each((_: number, detailEl: any) => {
+    const $detail = $(detailEl);
+    $detail.attr("itemscope", "");
+    $detail.attr("itemprop", "mainEntity");
+    $detail.attr("itemtype", "https://schema.org/Question");
+
+    const summary = $detail.find("summary").first();
+    if (summary.length) {
+      summary.attr("itemprop", "name");
+    }
+
+    // answer wrapper
+    const answerP = $detail.find("p").first();
+    if (answerP.length) {
+      answerP.wrap('<div itemscope itemprop="acceptedAnswer" itemtype="https://schema.org/Answer"></div>');
+      answerP.attr("itemprop", "text");
+    }
+  });
+
+  return $.html();
 }
 
 function buildProductReviewSchema(

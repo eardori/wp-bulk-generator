@@ -50,10 +50,10 @@ const GRADE_CONFIG: Record<string, { label: string; color: string; bgGradient: s
 };
 
 const CATEGORY_COLORS: Record<string, { bar: string; bg: string; icon: string }> = {
-  "구조화 데이터": { bar: "bg-violet-500", bg: "bg-violet-500/10", icon: "🔧" },
-  "콘텐츠 품질": { bar: "bg-cyan-500", bg: "bg-cyan-500/10", icon: "📝" },
-  "엔티티 존재감": { bar: "bg-amber-500", bg: "bg-amber-500/10", icon: "🌐" },
-  "권위성 신호": { bar: "bg-emerald-500", bg: "bg-emerald-500/10", icon: "⭐" },
+  "엔티티 권위성": { bar: "bg-emerald-500", bg: "bg-emerald-500/10", icon: "⭐" },
+  "플랫폼 존재감": { bar: "bg-amber-500", bg: "bg-amber-500/10", icon: "🌐" },
+  "웹사이트 최적화": { bar: "bg-violet-500", bg: "bg-violet-500/10", icon: "🔧" },
+  "AI 접근성": { bar: "bg-cyan-500", bg: "bg-cyan-500/10", icon: "🤖" },
 };
 
 const STATUS_ICON: Record<string, string> = {
@@ -159,11 +159,11 @@ export default function ScoreCheckerResults({ data, onReset }: ScoreCheckerResul
       {!data.hasWebsite && (
         <div className="bg-violet-500/5 border border-violet-500/20 rounded-2xl p-5 space-y-2">
           <h4 className="text-sm font-semibold text-violet-300 flex items-center gap-2">
-            🌐 웹사이트를 제작하면 최대 60점을 추가할 수 있습니다
+            🌐 웹사이트를 제작하면 최대 30점을 추가 확보할 수 있습니다
           </h4>
           <p className="text-xs text-gray-400 leading-relaxed">
-            현재 웹사이트가 없어 구조화 데이터(30점)와 콘텐츠 품질(30점) 카테고리가 0점 처리되었습니다.
-            WP Bulk Generator로 AEO 최적화 사이트를 제작하고 Schema를 설치하면 점수가 크게 향상됩니다.
+            현재 웹사이트가 없어 웹사이트 최적화(20점)와 AI 접근성(10점) 카테고리가 0점 처리되었습니다.
+            AEO 최적화 사이트를 제작하고 Schema + llms.txt를 설치하면 점수가 크게 향상됩니다.
           </p>
         </div>
       )}
@@ -172,11 +172,11 @@ export default function ScoreCheckerResults({ data, onReset }: ScoreCheckerResul
       {data.crawlFailed && (
         <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-5 space-y-2">
           <h4 className="text-sm font-semibold text-red-300 flex items-center gap-2">
-            ⚠️ 웹사이트 접근 불가 — 구조화 데이터 · 콘텐츠 품질 진단 생략
+            ⚠️ 웹사이트 접근 불가 — 웹사이트 최적화 · AI 접근성 진단 생략
           </h4>
           <p className="text-xs text-gray-400 leading-relaxed">
-            {data.crawlError || `입력하신 웹사이트(${data.websiteUrl})에 접근할 수 없어 구조화 데이터(30점)와 콘텐츠 품질(30점)을 진단하지 못했습니다.`}
-            {' '}도메인 주소를 확인하고 다시 시도하시거나, 웹사이트 없이 엔티티/권위성만 진단할 수 있습니다.
+            {data.crawlError || `입력하신 웹사이트(${data.websiteUrl})에 접근할 수 없어 웹사이트 최적화(20점)와 AI 접근성(10점)을 진단하지 못했습니다.`}
+            {' '}도메인 주소를 확인하고 다시 시도하시거나, 웹사이트 없이 엔티티 권위성/플랫폼 존재감만 진단할 수 있습니다.
           </p>
         </div>
       )}

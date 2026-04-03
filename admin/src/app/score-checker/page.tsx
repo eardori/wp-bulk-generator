@@ -47,11 +47,11 @@ type StepEvent = {
 const STEPS = [
   { step: 1, label: "업체 정보 자동 수집", icon: "🔍" },
   { step: 2, label: "웹페이지 크롤링", icon: "🌐" },
-  { step: 3, label: "구조화 데이터 분석", icon: "🔧" },
-  { step: 4, label: "콘텐츠 품질 체크", icon: "📝" },
-  { step: 5, label: "엔티티 존재감 확인", icon: "🌍" },
-  { step: 6, label: "권위성 신호 수집", icon: "⭐" },
-  { step: 7, label: "AI 종합 평가 생성", icon: "🤖" },
+  { step: 3, label: "웹사이트 최적화 분석", icon: "🔧" },
+  { step: 4, label: "엔티티 권위성 분석", icon: "⭐" },
+  { step: 5, label: "플랫폼 존재감 확인", icon: "🌍" },
+  { step: 6, label: "AI 접근성 확인", icon: "🤖" },
+  { step: 7, label: "AI 종합 평가 생성", icon: "📊" },
 ];
 
 export default function ScoreCheckerPage() {
@@ -152,8 +152,8 @@ export default function ScoreCheckerPage() {
                 AI 가시성 진단이란?
               </h3>
               <p className="text-sm text-gray-300 leading-relaxed max-w-3xl">
-                AI가 특정 업체를 추천하려면 <span className="text-emerald-300 font-medium">구조화 데이터, 콘텐츠 품질, 온라인 존재감, 권위성</span> 네 가지 조건이 필요합니다.
-                이 도구는 4개 카테고리 21개 항목을 자동 분석하여 <span className="text-emerald-300 font-medium">S~D등급</span>으로 평가하고, 구체적인 개선 가이드를 제공합니다.
+                AI가 특정 업체를 추천하려면 <span className="text-emerald-300 font-medium">엔티티 권위성, 플랫폼 존재감, 웹사이트 최적화, AI 접근성</span> 네 가지 조건이 필요합니다.
+                이 도구는 4개 카테고리를 자동 분석하여 <span className="text-emerald-300 font-medium">S~D등급</span>으로 평가하고, 구체적인 개선 가이드를 제공합니다.
               </p>
             </div>
 

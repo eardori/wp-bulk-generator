@@ -1,0 +1,112 @@
+import "dotenv/config";
+import Fastify from "fastify";
+import cors from "@fastify/cors";
+import { verifyApiKey } from "./utils/auth.js";
+import { closeBrowser } from "./utils/browser.js";
+import { imageRoutes } from "./routes/image.js";
+import { scrapeRoutes } from "./routes/scrape.js";
+import { reviewsRoutes } from "./routes/reviews.js";
+import { generateArticlesRoutes } from "./routes/generate-articles.js";
+import { generateConfigsRoutes } from "./routes/generate-configs.js";
+import { publishArticlesRoutes } from "./routes/publish-articles.js";
+import { seoOptimizeRoutes } from "./routes/seo-optimize.js";
+import { dashboardRoutes } from "./routes/dashboard.js";
+import { backfillDashboardCacheRoutes } from "./routes/backfill-dashboard-cache.js";
+import { deployRoutes } from "./routes/deploy.js";
+import { ec2ProxyRoutes } from "./routes/ec2-proxy.js";
+import { repairSitesRoutes } from "./routes/repair-sites.js";
+import { schemaRoutes } from "./routes/schema.js";
+import { aiTestRoutes } from "./routes/ai-test.js";
+import { scoreCheckerRoutes } from "./routes/score-checker.js";
+import { jobRoutes } from "./routes/jobs.js";
+import { startJobWorker, stopJobWorker } from "./lib/job-worker.js";
+const PORT = Number(process.env.PORT) || 4000;
+const HOST = process.env.HOST || "0.0.0.0";
+const DEFAULT_ALLOWED_ORIGINS = [
+    "https://wp.multiful.ai",
+    "https://wp-bulk-generator.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+];
+function getAllowedOrigins() {
+    const configured = (process.env.CORS_ORIGIN || "")
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean);
+    return new Set([...DEFAULT_ALLOWED_ORIGINS, ...configured]);
+}
+function isAllowedOrigin(origin, allowedOrigins) {
+    if (allowedOrigins.has(origin)) {
+        return true;
+    }
+    try {
+        const url = new URL(origin);
+        return url.protocol === "https:" && url.hostname.endsWith(".vercel.app");
+    }
+    catch {
+        return false;
+    }
+}
+const app = Fastify({
+    logger: true,
+    bodyLimit: 10 * 1024 * 1024, // 10MB
+});
+const allowedOrigins = getAllowedOrigins();
+// CORS
+await app.register(cors, {
+    origin(origin, callback) {
+        if (!origin || isAllowedOrigin(origin, allowedOrigins)) {
+            callback(null, true);
+            return;
+        }
+        callback(null, false);
+    },
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "X-Bridge-API-Key",
+    ],
+});
+// 모든 요청에 API Key 또는 JWT 인증 적용
+app.addHook("onRequest", verifyApiKey);
+// Health check (Fly.io 자체 상태)
+app.get("/health", async () => ({ status: "ok", service: "bridge-api" }));
+// 라우트 등록 (EC2-independent + hybrid)
+await app.register(imageRoutes);
+await app.register(scrapeRoutes);
+await app.register(reviewsRoutes);
+await app.register(generateArticlesRoutes);
+await app.register(generateConfigsRoutes);
+await app.register(publishArticlesRoutes);
+await app.register(seoOptimizeRoutes);
+await app.register(dashboardRoutes);
+await app.register(backfillDashboardCacheRoutes);
+await app.register(deployRoutes);
+await app.register(repairSitesRoutes);
+await app.register(ec2ProxyRoutes);
+await app.register(schemaRoutes);
+await app.register(aiTestRoutes);
+await app.register(scoreCheckerRoutes);
+await app.register(jobRoutes);
+// Graceful shutdown
+const shutdown = async () => {
+    app.log.info("Shutting down...");
+    stopJobWorker();
+    await closeBrowser();
+    await app.close();
+    process.exit(0);
+};
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
+try {
+    await app.listen({ port: PORT, host: HOST });
+    app.log.info({ allowedOrigins: [...allowedOrigins] }, "Bridge CORS origins loaded");
+    app.log.info(`Bridge API running on http://${HOST}:${PORT}`);
+    startJobWorker();
+}
+catch (err) {
+    app.log.error(err);
+    process.exit(1);
+}
+//# sourceMappingURL=server.js.map
