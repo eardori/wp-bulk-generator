@@ -382,10 +382,10 @@ export async function schemaRoutes(app: FastifyInstance) {
           const pluginPath = `${muPluginDir}/aeo-schema.php`;
 
           if (isRemoteTarget(target)) {
-            // Remote: Use SSH
+            // Remote: Use SSH with sudo (wp dirs owned by www-data)
             execSsh(
               target,
-              `mkdir -p ${shellQuote(muPluginDir)} && cat > ${shellQuote(pluginPath)} << 'EOFSCHEMA'\n${pluginContent}\nEOFSCHEMA`,
+              `sudo mkdir -p ${shellQuote(muPluginDir)} && sudo tee ${shellQuote(pluginPath)} > /dev/null << 'EOFSCHEMA'\n${pluginContent}\nEOFSCHEMA\nsudo chown www-data:www-data ${shellQuote(pluginPath)} && sudo chmod 644 ${shellQuote(pluginPath)}`,
               30000
             );
           } else {

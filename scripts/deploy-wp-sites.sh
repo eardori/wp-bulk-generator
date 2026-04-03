@@ -744,6 +744,7 @@ finalize_site_setup() {
 
   ensure_enable_app_passwords_mu_plugin "$site_dir"
   ensure_seo_mu_plugin "$site_dir"
+  ensure_schema_mu_plugin "$site_dir" "$domain"
   chown -R www-data:www-data "$site_dir/wp-content/mu-plugins" 2>/dev/null || true
   chmod 755 "$site_dir/wp-content/mu-plugins" 2>/dev/null || true
   chmod 644 "$site_dir/wp-content/mu-plugins/"*.php 2>/dev/null || true
@@ -826,6 +827,48 @@ ensure_enable_app_passwords_mu_plugin() {
 add_filter('wp_is_application_passwords_available', '__return_true');
 add_filter('wp_is_application_passwords_available_for_user', '__return_true');
 PHP
+}
+
+# AEO Schema (Organization JSON-LD) 자동 설치 MU-Plugin
+ensure_schema_mu_plugin() {
+  local site_dir="$1"
+  local domain="$2"
+  local mu_dir="$site_dir/wp-content/mu-plugins"
+  local schema_file="$mu_dir/aeo-schema.php"
+
+  # 이미 설치되어 있으면 건너뛰기
+  if [ -f "$schema_file" ]; then
+    return 0
+  fi
+
+  local site_title
+  site_title="$(wp_try option get blogname --path="$site_dir" --allow-root 2>/dev/null || true)"
+  [ -z "$site_title" ] && site_title="$domain"
+
+  local site_url
+  site_url="$(site_url_for_domain "$domain")"
+
+  # JSON 내부의 특수문자 이스케이프
+  local escaped_title
+  escaped_title="$(printf '%s' "$site_title" | sed "s/'/\\\\'/g" | sed 's/"/\\\\"/g')"
+
+  mkdir -p "$mu_dir"
+  cat > "$schema_file" << SCHEMAPHP
+<?php
+/**
+ * Plugin Name: AEO Schema (JSON-LD)
+ * Description: Auto-generated Organization Schema for AEO optimization
+ * Version: 1.0
+ * Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+ * Site: $domain
+ */
+
+add_action('wp_head', function() {
+    echo '<script type="application/ld+json">' . PHP_EOL;
+    echo '{ "@context": "https://schema.org", "@type": "Organization", "name": "${escaped_title}", "url": "${site_url}" }' . PHP_EOL;
+    echo '</script>' . PHP_EOL;
+}, 1);
+SCHEMAPHP
 }
 
 # AI SEO 최적화 MU-Plugin 설치
