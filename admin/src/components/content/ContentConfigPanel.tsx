@@ -7,6 +7,7 @@ type Props = {
   sites: SiteCredential[];
   contentPrompt: string;
   onGenerate: (configs: ContentArticleConfig[]) => void;
+  onSubmitAsJob?: (configs: ContentArticleConfig[]) => void;
   onBack: () => void;
 };
 
@@ -39,7 +40,7 @@ function getServerGroupLabel(serverId: string): string {
   return serverId;
 }
 
-export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, onBack }: Props) {
+export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, onSubmitAsJob, onBack }: Props) {
   const [configs, setConfigs] = useState<ContentArticleConfig[]>([]);
   const [activeServerTab, setActiveServerTab] = useState("all");
 
@@ -111,6 +112,13 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
     const active = configs.filter((c) => c.enabled);
     if (active.length === 0) return;
     onGenerate(active);
+  };
+
+  const handleSubmitJob = () => {
+    if (!onSubmitAsJob) return;
+    const active = configs.filter((c) => c.enabled);
+    if (active.length === 0) return;
+    onSubmitAsJob(active);
   };
 
   return (
@@ -286,17 +294,27 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
         >
           이전
         </button>
-        <button
-          onClick={handleGenerate}
-          disabled={totalArticles === 0}
-          className={`px-6 py-2.5 rounded-xl font-semibold transition-all text-sm ${
-            totalArticles > 0
-              ? "bg-gradient-to-r from-emerald-500 to-cyan-500 text-white hover:from-emerald-600 hover:to-cyan-600 shadow-lg shadow-emerald-500/20"
-              : "bg-gray-800 text-gray-500 cursor-not-allowed"
-          }`}
-        >
-          {totalArticles > 0 ? `${totalArticles}개 글 생성 시작 →` : "사이트를 선택하세요"}
-        </button>
+        <div className="flex items-center gap-2">
+          {onSubmitAsJob && totalArticles > 0 && (
+            <button
+              onClick={handleSubmitJob}
+              className="px-5 py-2.5 rounded-xl font-semibold transition-all text-sm bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:from-amber-600 hover:to-orange-600 shadow-lg shadow-amber-500/20"
+            >
+              🚀 백그라운드 Job ({totalArticles}개)
+            </button>
+          )}
+          <button
+            onClick={handleGenerate}
+            disabled={totalArticles === 0}
+            className={`px-6 py-2.5 rounded-xl font-semibold transition-all text-sm ${
+              totalArticles > 0
+                ? "bg-gradient-to-r from-emerald-500 to-cyan-500 text-white hover:from-emerald-600 hover:to-cyan-600 shadow-lg shadow-emerald-500/20"
+                : "bg-gray-800 text-gray-500 cursor-not-allowed"
+            }`}
+          >
+            {totalArticles > 0 ? `${totalArticles}개 실시간 생성 →` : "사이트를 선택하세요"}
+          </button>
+        </div>
       </div>
     </div>
   );

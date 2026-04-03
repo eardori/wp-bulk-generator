@@ -360,6 +360,50 @@ export default function ContentPage() {
     await runGeneration(siteConfigs, totalArticles, 0, []);
   };
 
+  // Background Job 제출 — 서버에서 자동 생성+발행
+  const handleSubmitAsJob = async (configs: ContentArticleConfig[]) => {
+    const siteConfigs = configs
+      .filter((c) => c.enabled)
+      .map((c) => ({ slug: c.siteSlug, count: c.count }));
+
+    const totalArticles = siteConfigs.reduce((sum, sc) => sum + sc.count, 0);
+
+    if (siteConfigs.length === 0 || totalArticles === 0) {
+      setLog((prev) => [...prev, "생성할 사이트를 찾지 못했습니다."]);
+      return;
+    }
+
+    setLog((prev) => [...prev, `🚀 백그라운드 Job 생성 중... (${siteConfigs.length}개 사이트, ${totalArticles}개 글)`]);
+
+    try {
+      const res = await fetch("/api/jobs/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productUrl: productUrl || "",
+          contentPrompt,
+          product,
+          reviewCollection,
+          siteConfigs,
+          aeoConfig: aeoConfig || undefined,
+          autoPublish: true,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setLog((prev) => [...prev, `❌ Job 생성 실패: ${data.error || "알 수 없는 오류"}`]);
+        return;
+      }
+
+      // Redirect to job dashboard
+      window.location.href = `/content/jobs`;
+    } catch (err) {
+      setLog((prev) => [...prev, `❌ Job 생성 오류: ${err}`]);
+    }
+  };
+
   // 이어서 생성 — 이미 생성된 articles.length 이후부터 재개
   const handleResumeGeneration = async () => {
     const startOffset = articles.length;
@@ -567,6 +611,7 @@ export default function ContentPage() {
           sites={sites}
           contentPrompt={contentPrompt}
           onGenerate={handleGenerate}
+          onSubmitAsJob={handleSubmitAsJob}
           onBack={() => (reviewCollection ? setStep("reviews-ready") : setStep("scraped"))}
         />
       )}

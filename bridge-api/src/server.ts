@@ -18,6 +18,8 @@ import { repairSitesRoutes } from "./routes/repair-sites.js";
 import { schemaRoutes } from "./routes/schema.js";
 import { aiTestRoutes } from "./routes/ai-test.js";
 import { scoreCheckerRoutes } from "./routes/score-checker.js";
+import { jobRoutes } from "./routes/jobs.js";
+import { startJobWorker, stopJobWorker } from "./lib/job-worker.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -96,10 +98,12 @@ await app.register(ec2ProxyRoutes);
 await app.register(schemaRoutes);
 await app.register(aiTestRoutes);
 await app.register(scoreCheckerRoutes);
+await app.register(jobRoutes);
 
 // Graceful shutdown
 const shutdown = async () => {
   app.log.info("Shutting down...");
+  stopJobWorker();
   await closeBrowser();
   await app.close();
   process.exit(0);
@@ -112,6 +116,7 @@ try {
   await app.listen({ port: PORT, host: HOST });
   app.log.info({ allowedOrigins: [...allowedOrigins] }, "Bridge CORS origins loaded");
   app.log.info(`Bridge API running on http://${HOST}:${PORT}`);
+  startJobWorker();
 } catch (err) {
   app.log.error(err);
   process.exit(1);

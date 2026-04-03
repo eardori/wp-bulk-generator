@@ -28,6 +28,10 @@ export default function RootLayout({
                 <a href="/" className="text-gray-400 hover:text-white transition-colors">사이트 생성</a>
                 <a href="/groups" className="text-gray-400 hover:text-white transition-colors">사이트 그룹</a>
                 <a href="/content" className="text-gray-400 hover:text-white transition-colors">콘텐츠 제작</a>
+                <a href="/content/jobs" className="text-gray-400 hover:text-white transition-colors flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                  Job 대시보드
+                </a>
 
                 {/* AEO 도구 드롭다운 */}
                 <div className="relative group">
