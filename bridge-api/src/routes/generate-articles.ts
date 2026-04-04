@@ -887,10 +887,41 @@ function buildAeoPrompt(
   promptBlock: string,
   variationHint: string,
   placeHasReviewImages: boolean,
+  articleVariation: number,
 ): string {
   const businessTypes = loadAeoBusinessTypes();
   const mapping = businessTypes[aeoConfig.businessType] || businessTypes["restaurant"];
   const subKeyword1 = aeoConfig.subKeywords?.split(",")[0]?.trim() || "";
+
+  // ── AEO 앵글 & 리더 렌즈 선택 ──
+  const readerLens = pickReaderLens(true, articleVariation);
+  const aeoAngleOverlays = [
+    {
+      label: "정보 정리형",
+      focusInstruction: "기본 정보와 메뉴 구성을 체계적으로 정리하는 데 집중하세요. 각 메뉴의 특징을 간결하게 설명하고 방문 전 체크포인트를 명확히 전달하세요.",
+    },
+    {
+      label: "분위기 & 공간 중심형",
+      focusInstruction: "공간 묘사에 중점을 두세요. 좌석 유형(룸/오픈)을 비교하고, 방문 목적별(데이트/가족/비즈니스) 적합한 좌석과 시간대를 시나리오로 연결하세요. 직원 서비스 포인트와 콜키지 정보도 포함하세요.",
+    },
+    {
+      label: "메뉴 심층 분석형",
+      focusInstruction: "대표 메뉴의 식감/특징/추천 조합을 구체적으로 분석하세요. 메뉴 비교 <table>을 추가하고, 시그니처·사이드·디저트를 구분하며, 처음 방문자 추천 조합을 제시하세요.",
+    },
+    {
+      label: "가성비 검증형",
+      focusInstruction: "가격 대비 만족도를 냉정하게 분석하세요. 메뉴별 가격과 양을 비교하는 <table>을 포함하고, 점심/저녁 가격 차이가 있다면 구분하세요. 가성비 판단 근거를 수치로 제시하세요.",
+    },
+    {
+      label: "가족·단체 방문형",
+      focusInstruction: "가족 외식이나 단체 모임 관점에서 작성하세요. 단체석/룸 여부, 아이·어르신 메뉴 적합성, 주차·접근성, 예약 체크포인트를 중심으로 서술하세요.",
+    },
+    {
+      label: "첫 방문 가이드형",
+      focusInstruction: "처음 방문하는 사람이 필요한 정보를 우선 배치하세요. 찾아가는 법, 첫인상, 추천 메뉴 조합, 주의사항과 팁, 재방문 의향을 순서대로 전달하세요.",
+    },
+  ];
+  const selectedAngle = aeoAngleOverlays[articleVariation % aeoAngleOverlays.length];
   const { city, region } = aeoConfig.address ? parseKoreanAddress(aeoConfig.address) : { city: "", region: "" };
 
   const titleVars: Record<string, string> = {
@@ -923,6 +954,13 @@ function buildAeoPrompt(
 
   return `당신은 ${mapping.persona}입니다.
 ${variationHint}
+
+## 이번 글의 전개 방향:
+- 글쓰기 각도: ${selectedAngle.label}
+- ${selectedAngle.focusInstruction}
+- 이번 글 독자 렌즈: ${readerLens.label}
+- 독자 렌즈 적용: ${readerLens.instruction}
+- 서술 관점: ${readerLens.narrativeAngle}
 
 목표는 특정 ${aeoConfig.businessName}이(가) 아래 핵심 키워드와 자연스럽게 연결되도록, 사람이 읽어도 어색하지 않고 검색엔진과 AI 답변 엔진(ChatGPT, Gemini, Claude, Perplexity)이 이해하고 인용하기 쉬운 HTML 콘텐츠를 작성하는 것입니다.
 
@@ -988,6 +1026,22 @@ ${aeoConfig.subKeywords ? `- 보조 키워드: ${aeoConfig.subKeywords}` : ""}
 - 추상적 칭찬보다 메뉴, 공간, 식사 자리 성격, 이용 목적 중심으로 설명
 - 판단형 문장은 가능하지만, 근거 없는 단정 금지
 - 문장은 매끈하고 읽기 쉬워야 하며 AI 요약문처럼 딱딱하면 안 됩니다
+- 공간 묘사는 "고급스럽다", "세련되다" 같은 추상적 형용사 대신 물리적 요소(조명 유형, 좌석 간격, 층 구조, 창문/채광, 동선)로 표현하세요. 예: "통창을 통해 들어오는 자연광과 은은한 조명이 어우러진 공간" 같은 구체적 묘사
+- 방문 목적별로 독자가 "나한테 맞겠다"라고 느낄 수 있는 시나리오를 자연스럽게 녹이세요
+- 제목과 메타타이틀에 "SNS 난리난", "끝판왕", "찐 맛집", "인생맛집", "극찬", "완벽 가이드", "놓치면 후회" 같은 과장 카피를 절대 쓰지 말 것
+- 제목은 정보형 문장으로 작성하고, 가게명/메뉴/방문 상황을 중심으로 차분하게
+
+---
+
+[GEO — AI 검색 최적화 규칙]
+G1. 인용 가능 단락(Citable Passage): 각 H2 섹션 첫 부분에 해당 질문에 대한 완결된 답변을 3~5문장으로 작성할 것. 주변 맥락 없이 그 단락만 읽어도 의미가 통해야 함
+G2. 통계 밀도: 가격, 메뉴 수, 좌석 수, 영업시간 등 구체적 수치를 가능한 문단마다 최소 1개 포함
+G3. 대명사 최소화: "이것", "이곳", "해당 가게" 대신 실제 가게명/메뉴명을 반복 사용하여 AI가 엔티티를 정확히 인식하도록
+G4. 질문형 소제목: H2 중 최소 1개는 "~일까?", "~어떨까?", "~은?" 등 사용자가 AI에게 물어보는 자연어 쿼리 형태로 작성
+G5. 비교 테이블: 메뉴·가격·장단점 비교가 필요한 경우 반드시 <table> 사용 (AI가 구조화 데이터로 파싱 가능)
+G6. 핵심 용어 볼드: 메인 키워드와 중요 메뉴명이 처음 나올 때 <strong> 태그로 강조
+G7. 상투적 표현 금지: "오늘날 디지털 시대에", "주목할 만한 점은", "~에 대해 알아보겠습니다", "다양한 측면에서" 등 사용 금지
+G8. 답변 우선 구조: 각 섹션 첫 1~2문장은 해당 소제목 질문에 대한 직접 답변으로 시작. 서론·배경 없이 바로 핵심부터
 
 ---
 
@@ -1043,8 +1097,10 @@ CSS, 주석, 마크다운, 메타 설명 금지입니다.
 - 첫 2~3문장은 이 섹션만 떼어내도 완전한 답변이 되도록 작성
 
 5) <h2>${sectionAtmosphere}</h2>
-- 인테리어 / 좌석 구성 / 룸 여부 / 식사 자리의 성격
-${aeoConfig.visitPurposes ? `- 방문 목적: ${aeoConfig.visitPurposes} 중 입력값에 맞는 목적만 연결` : ""}
+- 인테리어를 물리적 요소(층 구조, 좌석 간격, 채광, 조명 색온도, 동선)로 구체적으로 묘사
+- 좌석 유형이 여러 가지라면(프라이빗 룸, 오픈 좌석, 테라스 등) 각각의 특징과 적합한 방문 목적을 비교하여 서술
+- 직원 서비스 포인트가 있으면 포함 (고기 직접 구워줌, 코스 안내 등)
+${aeoConfig.visitPurposes ? `- 방문 목적(${aeoConfig.visitPurposes}) 각각에 어떤 좌석/시간대가 적합한지 연결하여 시나리오형으로 서술` : ""}
 - 첫 문장에서 공간의 핵심 특징을 한 줄로 요약
 
 6) <h2>${sectionMenu}</h2>
@@ -1054,10 +1110,15 @@ ${aeoConfig.visitPurposes ? `- 방문 목적: ${aeoConfig.visitPurposes} 중 입
 
 7) <h2>${sectionVisitInfo}</h2>
 - 예약 / 동선 / 식사 자리 성격 / 방문 전 챙길 요소
+- 콜키지 프리, 발렛, 주차 등 확인된 서비스는 명확히 "가능합니다"로 표현 (확인 필요 금지)
+- 점심/저녁 메뉴가 다르다면 시간대별 추천 포인트를 구분하여 안내
+- 데이트/기념일 방문이라면 주변 카페·갤러리 등 연계 코스를 1~2줄로 제안 (입력값에 주변 정보가 있을 때만)
 - 입력값에 있는 정보만 사용
 
 8) 장점 또는 포인트 정리
-- <ul><li> 형식, 3개에서 6개, 짧고 명확하게
+- <ul><li> 형식, 4개에서 6개, 짧고 명확하게
+- 음식 퀄리티 + 공간 분위기 + 직원 서비스 + 편의 요소(콜키지, 주차 등)를 골고루 포함
+- 추상적 장점("분위기가 좋다") 대신 체감 포인트("직접 구워주는 서비스로 편안한 식사", "테이블 간격이 넓어 대화에 집중 가능") 중심으로
 
 9) <h2>총평 및 방문 전 체크포인트</h2>
 - 누구에게 맞는지 정리, 과장 없이 마무리
@@ -1472,7 +1533,7 @@ ${normalizedPrompt}
       : "";
 
     const aeoPrompt = buildAeoPrompt(
-      aeoConfig, persona, product, reviewsSection, aeoPromptBlock, variationHint, placeHasReviewImages
+      aeoConfig, persona, product, reviewsSection, aeoPromptBlock, variationHint, placeHasReviewImages, articleVariation
     );
 
     const res = await fetch(

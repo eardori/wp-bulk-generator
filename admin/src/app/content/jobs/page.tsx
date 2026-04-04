@@ -55,11 +55,12 @@ function formatTime(iso: string) {
 }
 
 function calcProgress(job: ContentJob) {
+  if (job.status === "done" || job.status === "cancelled") return 100;
   if (job.totalArticles === 0) return 0;
   if (job.input.autoPublish) {
-    return Math.round((job.publishedCount / job.totalArticles) * 100);
+    return Math.min(99, Math.round(((job.publishedCount + job.failedCount) / job.totalArticles) * 100));
   }
-  return Math.round((job.generatedCount / job.totalArticles) * 100);
+  return Math.min(99, Math.round(((job.generatedCount + job.failedCount) / job.totalArticles) * 100));
 }
 
 // ── Component ───────────────────────────────────────────────────────────────
