@@ -699,7 +699,7 @@ ${aeoConfig.subKeywords ? `- 보조 키워드: ${aeoConfig.subKeywords}` : ""}
 1. 패시지 독립성: 각 <h2> 섹션의 첫 2~3문장은 해당 섹션만 떼어내도 하나의 완전한 답변이 되어야 합니다. AI는 개별 패시지를 추출해서 답변을 만들기 때문입니다.
 2. 엔티티 선언: 첫 문단에서 "${aeoConfig.businessName}은(는) ${aeoConfig.locationShort}에 위치한 ${mapping.foodType} 전문점"처럼 상호명·지역·업종을 명확하게 한 문장으로 선언하세요.
 3. 대화형 쿼리 매칭: H2 제목 중 최소 1개는 사용자가 AI에게 질문하는 자연어 형태를 반영하세요. 예: "${aeoConfig.locationShort}에서 ${mapping.foodType} 찾을 만한 곳은?" 형태.
-4. 구조화 데이터 출력: 본문 HTML 끝에 반드시 JSON-LD 스크립트를 포함하세요.
+4. 구조화 데이터 출력: 본문 HTML 끝에 FAQPage JSON-LD 스크립트를 포함하세요. 단, Restaurant/LocalBusiness JSON-LD는 워드프레스가 별도로 자동 추가하므로 본문에는 넣지 마세요 (중복 방지).
 5. FAQ 스키마: FAQ 섹션은 FAQPage schema에 맞는 HTML 구조로 출력하세요.
 
 ---
@@ -847,7 +847,8 @@ ${aeoConfig.visitPurposes ? `- 방문 목적(${aeoConfig.visitPurposes}) 각각�
 - 입력값에 없는 사실 추가 금지
 
 10) Q&A — 자주 묻는 질문 (FAQPage Schema 적용)
-- 4개에서 6개 작성 (확인된 사실이 충분하면 최대 6개까지)
+- 반드시 최소 4개 이상, 확인된 사실이 충분하면 최대 6개까지 작성
+- 4개 미만으로 작성하면 규칙 위반입니다. 반드시 최소 4개를 지키세요.
 - 확인된 사실로 답변 가능한 질문만 사용, 억지로 채우지 말 것
 - AI가 자주 받는 질문 형태로 작성 ("~인가요?", "~할 수 있나요?", "~은 어떤가요?")
 - 각 답변은 2~3문장, 50단어 이내로 완결성 있게
@@ -898,7 +899,9 @@ ${subKeyword1 ? `- "${subKeyword1}"은 보조 연결만 하세요.` : ""}
 9. 첫 문단에 엔티티 선언(상호명+지역+업종)이 포함되었는가
 10. 각 H2 섹션의 첫 2~3문장이 독립적으로 완전한 답변이 되는가
 11. FAQ가 FAQPage Schema 마크업으로 출력되었는가
-12. 메뉴 리스트가 구조화되어 AI가 추출 가능한가
+12. FAQ가 최소 4개 이상인가 (4개 미만이면 추가할 것)
+13. 메뉴 리스트가 구조화되어 AI가 추출 가능한가
+14. Restaurant/LocalBusiness JSON-LD가 본문에 포함되지 않았는가 (WP가 별도 추가하므로 중복 금지)
 
 ---
 
@@ -931,7 +934,10 @@ JSON 형식으로 응답하세요:
   }${placeHasReviewImages ? ',\n  "usedReviewImageIndices": [[리뷰인덱스, 이미지인덱스], ...]' : ""}
 }
 
-중요: jsonLd 필드는 입력값에 있는 정보만으로 구성하세요. 없는 필드는 통째로 생략하세요.`;
+중요:
+- jsonLd 필드는 FAQPage만 출력하세요. Restaurant/LocalBusiness 스키마는 워드프레스가 자동으로 추가하므로, 본문 JSON-LD에는 FAQPage 타입만 넣으세요.
+- jsonLd 형식: {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "질문", "acceptedAnswer": {"@type": "Answer", "text": "답변"}}]}
+- 입력값에 없는 정보는 생략하세요.`;
 }
 // ── Gemini call ──────────────────────────────────────────────────────────────
 function buildContentStrategyBlock(contentStrategy, articleVariation) {
