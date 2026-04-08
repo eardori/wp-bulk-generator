@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SiteCredential, ContentArticleConfig } from "@/app/content/types";
 
 type Props = {
@@ -45,29 +45,38 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
   const [activeServerTab, setActiveServerTab] = useState("all");
 
   useEffect(() => {
-    setConfigs((prev) => {
-      const prevMap = new Map(prev.map((config) => [config.siteSlug, config]));
-      return sites.map((site) => prevMap.get(site.slug) || {
-        siteSlug: site.slug,
-        count: 1,
-        enabled: true,
+    const t = setTimeout(() => {
+      setConfigs((prev) => {
+        const prevMap = new Map(prev.map((config) => [config.siteSlug, config]));
+        return sites.map((site) => prevMap.get(site.slug) || {
+          siteSlug: site.slug,
+          count: 1,
+          enabled: true,
+        });
       });
-    });
+    }, 0);
+    return () => clearTimeout(t);
   }, [sites]);
 
-  const serverTabs = [
-    { id: "all", label: "전체 사이트", count: sites.length },
-    ...Array.from(new Set(sites.map((site) => getServerGroupId(site)))).map((serverId) => ({
-      id: serverId,
-      label: getServerGroupLabel(serverId),
-      count: sites.filter((site) => getServerGroupId(site) === serverId).length,
-    })),
-  ];
+  const serverTabs = useMemo(() => {
+    const tabs = [
+      { id: "all", label: "전체 사이트", count: sites.length },
+      ...Array.from(new Set(sites.map((site) => getServerGroupId(site)))).map((serverId) => ({
+        id: serverId,
+        label: getServerGroupLabel(serverId),
+        count: sites.filter((site) => getServerGroupId(site) === serverId).length,
+      })),
+    ];
+    return tabs;
+  }, [sites]);
 
   useEffect(() => {
-    if (!serverTabs.some((tab) => tab.id === activeServerTab)) {
-      setActiveServerTab("all");
-    }
+    const t = setTimeout(() => {
+      if (!serverTabs.some((tab) => tab.id === activeServerTab)) {
+        setActiveServerTab("all");
+      }
+    }, 0);
+    return () => clearTimeout(t);
   }, [activeServerTab, serverTabs]);
 
   const filteredSites = sites.filter((site) =>

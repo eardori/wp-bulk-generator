@@ -219,7 +219,7 @@ export default function SiteGeneratorForm({
                 DNS 설정 방법 (도메인 구매 후 1번만)
               </div>
               <div className="font-mono text-xs bg-gray-900/60 rounded-lg p-3 space-y-1 text-gray-300">
-                <div className="text-gray-500">// 레지스트라 DNS 패널에서 추가</div>
+                <div className="text-gray-500">{"// 레지스트라 DNS 패널에서 추가"}</div>
                 <div>
                   <span className="text-yellow-400">타입:</span> A &nbsp;
                   <span className="text-yellow-400">호스트:</span>{" "}

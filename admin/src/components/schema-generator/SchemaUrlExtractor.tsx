@@ -35,7 +35,7 @@ type ExtractionState = "idle" | "extracting" | "extracted" | "generated" | "erro
 export default function SchemaUrlExtractor() {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<ExtractionState>("idle");
-  const [extracted, setExtracted] = useState<ExtractedBusinessInfo | null>(null);
+
   const [editData, setEditData] = useState<ExtractedBusinessInfo | null>(null);
   const [output, setOutput] = useState<SchemaOutput | null>(null);
   const [error, setError] = useState("");
@@ -62,7 +62,6 @@ export default function SchemaUrlExtractor() {
         return;
       }
 
-      setExtracted(result.data);
       setEditData(result.data);
       setSource(result.source || "");
       setState("extracted");
@@ -115,7 +114,6 @@ export default function SchemaUrlExtractor() {
 
   const handleReset = () => {
     setState("idle");
-    setExtracted(null);
     setEditData(null);
     setOutput(null);
     setError("");

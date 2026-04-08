@@ -100,7 +100,12 @@ export async function readSSEStream(
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
       try {
-        const data = JSON.parse(line.slice(6));
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") {
+          onEvent({ type: "done" });
+          continue;
+        }
+        const data = JSON.parse(payload);
         if (data.type === "heartbeat") continue;
         onEvent(data);
       } catch {

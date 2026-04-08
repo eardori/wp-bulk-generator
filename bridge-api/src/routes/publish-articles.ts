@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { execFileSync, execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import type { FastifyInstance } from "fastify";
 import { tmpdir } from "os";
@@ -166,14 +166,12 @@ function buildDashboardPostEntry(article: GeneratedArticle, result: PublishResul
 // ── Image helpers ────────────────────────────────────────────────────────────
 
 function downloadImageWithCurl(url: string): Buffer {
-  const escapedUrl = url.replace(/'/g, "'\\''");
-  const cmd = [
-    "curl", "-s", "-L", "--max-time", "20",
+  const result = execFileSync("curl", [
+    "-s", "-L", "--max-time", "20",
     "-H", "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
     "-H", "Referer: https://smartstore.naver.com/",
-    `'${escapedUrl}'`,
-  ].join(" ");
-  const result = execSync(cmd, { timeout: 25000, maxBuffer: 20 * 1024 * 1024, encoding: "buffer" });
+    url,
+  ], { timeout: 25000, maxBuffer: 20 * 1024 * 1024 });
   if (!result || result.length < 100) throw new Error("Empty image response");
   return result;
 }

@@ -84,6 +84,7 @@ export function verifyApiKey(
 
       if (!isJwtRouteAllowed(pathname, route)) {
         reply.code(403).send({ error: "Token route mismatch" });
+        done();
         return;
       }
 
@@ -91,11 +92,13 @@ export function verifyApiKey(
       return done();
     } catch {
       reply.code(401).send({ error: "Invalid token" });
+      done();
       return;
     }
   }
 
   reply.code(401).send({ error: "Unauthorized" });
+  done();
 }
 
 export function signToken(payload: object, expiresIn = "15m"): string {

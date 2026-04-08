@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -17,15 +18,15 @@ export default function RootLayout({
         <nav className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-6">
-              <a href="/" className="flex items-center gap-3">
+              <Link href="/" className="flex items-center gap-3">
                 <div className="w-8 h-8 bg-gradient-to-br from-emerald-400 to-cyan-400 rounded-lg flex items-center justify-center text-sm font-bold text-gray-900">
                   W
                 </div>
                 <span className="text-lg font-semibold text-white">WP Bulk Generator</span>
-              </a>
+              </Link>
               <div className="flex items-center gap-4 text-sm">
                 <a href="/dashboard" className="text-gray-400 hover:text-white transition-colors">대시보드</a>
-                <a href="/" className="text-gray-400 hover:text-white transition-colors">사이트 생성</a>
+                <Link href="/" className="text-gray-400 hover:text-white transition-colors">사이트 생성</Link>
                 <a href="/groups" className="text-gray-400 hover:text-white transition-colors">사이트 그룹</a>
                 <a href="/content" className="text-gray-400 hover:text-white transition-colors">콘텐츠 제작</a>
                 <a href="/content/jobs" className="text-gray-400 hover:text-white transition-colors flex items-center gap-1">
