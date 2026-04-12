@@ -32,12 +32,15 @@ fi
 case "$SERVER_ROLE" in
   primary)
     DEFAULT_ALLMYREVIEW_CERT_NAME="allmyreview-primary-sites"
+    DEFAULT_MYGROUND_CERT_NAME="myground-primary-sites"
     ;;
   secondary)
     DEFAULT_ALLMYREVIEW_CERT_NAME="allmyreview-secondary-sites"
+    DEFAULT_MYGROUND_CERT_NAME="myground-secondary-sites"
     ;;
   *)
     DEFAULT_ALLMYREVIEW_CERT_NAME="allmyreview-sites"
+    DEFAULT_MYGROUND_CERT_NAME="myground-sites"
     ;;
 esac
 
@@ -49,6 +52,9 @@ CREDS_FILE="/root/wp-sites-credentials.json"
 ALLMYREVIEW_CERT_NAME="${ALLMYREVIEW_CERT_NAME:-$DEFAULT_ALLMYREVIEW_CERT_NAME}"
 ALLMYREVIEW_CERT_DIR="/etc/letsencrypt/live/$ALLMYREVIEW_CERT_NAME"
 ALLMYREVIEW_CERT_MAX_NAMES="${ALLMYREVIEW_CERT_MAX_NAMES:-100}"
+MYGROUND_CERT_NAME="${MYGROUND_CERT_NAME:-$DEFAULT_MYGROUND_CERT_NAME}"
+MYGROUND_CERT_DIR="/etc/letsencrypt/live/$MYGROUND_CERT_NAME"
+MYGROUND_CERT_MAX_NAMES="${MYGROUND_CERT_MAX_NAMES:-100}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 WP_CRON_RUNNER_PATH="${WP_CRON_RUNNER_PATH:-/usr/local/bin/wp-bulk-run-cron.sh}"
 WP_CRON_SCHEDULE_PATH="${WP_CRON_SCHEDULE_PATH:-/etc/cron.d/wp-bulk-run-cron}"
@@ -356,6 +362,121 @@ ensure_allmyreview_certificate() {
   fi
 }
 
+collect_myground_domains() {
+  python3 - "$CONFIG_FILE" <<'PY'
+from pathlib import Path
+import json
+import subprocess
+import sys
+
+domains = set()
+root = Path("/var/www")
+if root.exists():
+    for site_dir in root.iterdir():
+        if not site_dir.is_dir() or not (site_dir / "wp-config.php").exists():
+            continue
+        try:
+            home = subprocess.check_output(
+                ["wp", "option", "get", "home", f"--path={site_dir}", "--allow-root"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=8,
+            ).strip().lower()
+        except Exception:
+            continue
+        if home.startswith("https://"):
+            home = home[len("https://"):]
+        elif home.startswith("http://"):
+            home = home[len("http://"):]
+        domain = home.split("/", 1)[0]
+        if domain.endswith(".myground.website") or domain == "myground.website":
+            domains.add(domain)
+
+config_path = Path(sys.argv[1])
+if config_path.exists():
+    try:
+      payload = json.loads(config_path.read_text())
+    except Exception:
+      payload = []
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            domain = str(item.get("domain") or "").strip().lower()
+            if domain.endswith(".myground.website") or domain == "myground.website":
+                domains.add(domain)
+
+for domain in sorted(domains):
+    print(domain)
+PY
+}
+
+ensure_myground_certificate() {
+  if [ "${SKIP_CERTBOT:-0}" = "1" ]; then
+    echo "  ↷ SKIP_CERTBOT=1 설정으로 myground certbot 단계를 건너뜁니다."
+    return 0
+  fi
+
+  if ! command -v certbot >/dev/null 2>&1; then
+    echo "  ⚠ certbot이 없어 myground SSL 인증서를 갱신하지 못했습니다."
+    return 0
+  fi
+
+  mapfile -t domains < <(collect_myground_domains)
+  if [ "${#domains[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  if [ "${#domains[@]}" -gt "$MYGROUND_CERT_MAX_NAMES" ]; then
+    echo "  ⚠ myground SSL 인증서 SAN 도메인이 ${#domains[@]}개입니다. wildcard 인증서 전환이 필요합니다."
+    return 0
+  fi
+
+  local missing=()
+  local domain
+  for domain in "${domains[@]}"; do
+    if ! [[ -f "$MYGROUND_CERT_DIR/fullchain.pem" ]] || ! openssl x509 -in "$MYGROUND_CERT_DIR/fullchain.pem" -noout -text 2>/dev/null | grep -Fq "DNS:$domain"; then
+      missing+=("$domain")
+    fi
+  done
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    echo "  ✓ myground SSL 인증서 도메인 포함 상태 정상"
+    return 0
+  fi
+
+  echo "--- myground SSL 인증서 확장 (${#missing[@]}개 신규) ---"
+  printf '  + %s\n' "${missing[@]}"
+
+  local certbot_args=(
+    certbot certonly
+    --nginx
+    --non-interactive
+    --cert-name "$MYGROUND_CERT_NAME"
+  )
+
+  if [ -n "$CERTBOT_EMAIL" ]; then
+    certbot_args+=(--agree-tos --email "$CERTBOT_EMAIL")
+  else
+    certbot_args+=(--agree-tos --register-unsafely-without-email)
+  fi
+
+  if [ -f "$MYGROUND_CERT_DIR/fullchain.pem" ]; then
+    certbot_args+=(--expand)
+  fi
+
+  for domain in "${domains[@]}"; do
+    certbot_args+=(-d "$domain")
+  done
+
+  if "${certbot_args[@]}"; then
+    nginx -t && systemctl reload nginx
+    echo "  ✓ myground SSL 인증서 갱신 완료"
+  else
+    echo "  ⚠ myground SSL 인증서 갱신 실패"
+  fi
+}
+
 ensure_individual_certificate() {
   local domain="$1"
 
@@ -414,6 +535,8 @@ site_url_for_domain() {
   local domain
   domain="$(normalize_domain "$1")"
   if [[ "$domain" == *.allmyreview.site ]]; then
+    printf 'https://%s' "$domain"
+  elif [[ "$domain" == *.myground.website ]] || [[ "$domain" == "myground.website" ]]; then
     printf 'https://%s' "$domain"
   elif get_individual_cert_dir "$domain" >/dev/null 2>&1; then
     printf 'https://%s' "$domain"
@@ -595,6 +718,110 @@ server {
 
     ssl_certificate $ALLMYREVIEW_CERT_DIR/fullchain.pem;
     ssl_certificate_key $ALLMYREVIEW_CERT_DIR/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    set \$skip_cache 0;
+    if (\$request_method = POST) { set \$skip_cache 1; }
+    if (\$request_uri ~* "/wp-admin/|/xmlrpc.php|wp-.*.php|/feed/|index.php|sitemap(_index)?.xml") {
+        set \$skip_cache 1;
+    }
+    if (\$http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_no_cache|wordpress_logged_in") {
+        set \$skip_cache 1;
+    }
+
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options SAMEORIGIN;
+    add_header Referrer-Policy "strict-origin-when-cross-origin";
+    include $SCANNER_BLOCK_SNIPPET;
+
+    if (\$args ~ "(^|&)p=") { set \$skip_cache 1; }
+    if (\$args ~ "(^|&)p=") { set \$invalid_post_query 1; }
+    if (\$arg_p ~ "^[0-9]+\$") { set \$invalid_post_query 0; }
+    if (\$invalid_post_query = 1) { return 301 https://\$host\$uri; }
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+
+    location ~ \\.php\$ {
+        include fastcgi_params;
+        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param HTTPS on;
+        fastcgi_param SERVER_PORT 443;
+        fastcgi_connect_timeout 30s;
+        fastcgi_send_timeout 120s;
+        fastcgi_read_timeout 120s;
+
+        fastcgi_cache WPCACHE;
+        fastcgi_cache_valid 200 10d;
+        fastcgi_cache_valid 404 1m;
+        fastcgi_cache_lock on;
+        fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
+        fastcgi_cache_bypass \$skip_cache;
+        fastcgi_no_cache \$skip_cache;
+        add_header X-Cache \$upstream_cache_status;
+    }
+
+    location = /robots.txt {
+        access_log off;
+        log_not_found off;
+    }
+
+    location = /llms.txt {
+        access_log off;
+        log_not_found off;
+        default_type text/plain;
+    }
+
+    location = /llms-full.txt {
+        access_log off;
+        log_not_found off;
+        default_type text/plain;
+    }
+
+    location ~ /sitemap.*\\.xml\$ {
+        try_files \$uri /index.php?\$args;
+        expires 5m;
+        add_header Cache-Control "public";
+    }
+
+    location ~* \\.(aspx|asp|ashx|axd|bak|old|orig|save|sql|ini|log|sh|pem|yml|yaml|dist)\$ {
+        return 404;
+    }
+
+    location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff2|woff|ttf|eot)\$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+
+    location ~ /\\. { deny all; }
+    location ~* /wp-config.php { deny all; }
+    location ~* /readme.html { deny all; }
+    location ~* /license.txt { deny all; }
+}
+NGINX
+  elif { [[ "$domain" == *.myground.website ]] || [[ "$domain" == "myground.website" ]]; } \
+    && [[ -f "$MYGROUND_CERT_DIR/fullchain.pem" ]] \
+    && [[ -f "$MYGROUND_CERT_DIR/privkey.pem" ]]; then
+    cat > "$nginx_path" << NGINX
+server {
+    listen 80;
+    server_name $domain;
+
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $domain;
+    root $site_dir;
+    index index.php index.html;
+
+    ssl_certificate $MYGROUND_CERT_DIR/fullchain.pem;
+    ssl_certificate_key $MYGROUND_CERT_DIR/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
@@ -2031,16 +2258,19 @@ if [ "${#SUCCESSFUL_SITES[@]}" -gt 0 ]; then
   purge_fastcgi_cache
 fi
 ensure_allmyreview_certificate
+ensure_myground_certificate
 
-# 비-allmyreview 개별 도메인 SSL 발급 및 Nginx HTTPS 전환
+# 비-allmyreview/myground 개별 도메인 SSL 발급 및 Nginx HTTPS 전환
 for i in $(seq 0 $(($SITE_COUNT - 1))); do
   IND_DOMAIN=$(jq -r ".[$i].domain // empty" "$CONFIG_FILE")
   IND_DOMAIN="$(normalize_domain "$IND_DOMAIN")"
   IND_SLUG=$(jq -r ".[$i].site_slug" "$CONFIG_FILE")
   IND_SITE_DIR="$WEB_ROOT/$IND_SLUG"
 
-  # allmyreview 도메인은 공유 인증서 사용, .local은 제외
+  # 공유 인증서 도메인은 제외, .local은 제외
   [[ "$IND_DOMAIN" == *.allmyreview.site ]] && continue
+  [[ "$IND_DOMAIN" == *.myground.website ]] && continue
+  [[ "$IND_DOMAIN" == "myground.website" ]] && continue
   [[ "$IND_DOMAIN" == *.local ]] && continue
   [[ -z "$IND_DOMAIN" ]] && continue
   # 이미 설치된 사이트만 대상
