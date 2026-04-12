@@ -416,6 +416,7 @@ User-agent: cohere-ai
 Allow: /
 
 Sitemap: ${site_url}/sitemap_index.xml
+Sitemap: ${site_url}/wp-sitemap.xml
 ROBOTS
 }
 

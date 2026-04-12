@@ -1050,6 +1050,7 @@ G5. 비교 테이블: 메뉴·가격·장단점 비교가 필요한 경우 반�
 G6. 핵심 용어 볼드: 메인 키워드와 중요 메뉴명이 처음 나올 때 <strong> 태그로 강조
 G7. 상투적 표현 금지: "오늘날 디지털 시대에", "주목할 만한 점은", "~에 대해 알아보겠습니다", "다양한 측면에서" 등 사용 금지
 G8. 답변 우선 구조: 각 섹션 첫 1~2문장은 해당 소제목 질문에 대한 직접 답변으로 시작. 서론·배경 없이 바로 핵심부터
+G9. Bing Copilot 최적화: 첫 문단 150자 이내에 핵심 답변을 완성할 것 (Bing은 첫 문단 의존도가 높음). 비교 테이블을 적극 활용하고, 주요 고유명사에 영문 병기를 권장 (예: "갈비 (Korean BBQ ribs)")
 
 ---
 
@@ -1696,6 +1697,7 @@ G6. 비교 테이블: 메뉴, 가격, 장단점 비교 시 반드시 <table> 사
 G7. 핵심 용어 볼드: 중요 키워드가 처음 나올 때 <strong> 태그로 강조
 G8. 상투적 표현 금지: "오늘날 디지털 시대에", "주목할 만한 점은", "결론적으로 말하자면", "다양한 측면에서", "~에 대해 알아보겠습니다" 등 사용 금지
 G9. 답변 우선 구조: 각 섹션 첫 1~2문장은 해당 소제목 질문에 대한 직접 답변
+G10. Bing Copilot 최적화: 첫 문단 150자 이내에 핵심 답변을 완성할 것 (Bing은 첫 문단 의존도가 높음). 비교 테이블을 적극 활용하고, 주요 고유명사에 영문 병기를 권장 (예: "갈비 (Korean BBQ ribs)")
 
 JSON 형식으로 응답하세요:
 {
@@ -1828,6 +1830,7 @@ ${promptInstructionBlock}
 	G7. 핵심 용어 볼드: 중요 키워드가 처음 나올 때 <strong> 태그로 강조
 	G8. 상투적 표현 금지: "오늘날 디지털 시대에", "주목할 만한 점은", "결론적으로 말하자면", "다양한 측면에서", "~에 대해 알아보겠습니다" 등 사용 금지
 	G9. 답변 우선 구조: 각 섹션 첫 1~2문장은 해당 소제목 질문에 대한 직접 답변
+G10. Bing Copilot 최적화: 첫 문단 150자 이내에 핵심 답변을 완성할 것 (Bing은 첫 문단 의존도가 높음). 비교 테이블을 적극 활용하고, 주요 고유명사에 영문 병기를 권장 (예: "프로바이오틱스 (Probiotics)")
 
 JSON 형식으로 응답하세요:
 {
@@ -1891,12 +1894,12 @@ JSON 형식으로 응답하세요:
 
   const faqHtml =
     faqItems.length > 0
-      ? `\n<h2>Q&A — 자주 묻는 질문</h2>\n${faqItems
+      ? `\n<div itemscope itemtype="https://schema.org/FAQPage">\n<h2>Q&A — 자주 묻는 질문</h2>\n${faqItems
           .map(
             (f) =>
-              `<details><summary><strong>${f.question}</strong></summary>\n<p>${f.answer}</p></details>`
+              `<div itemscope itemprop="mainEntity" itemtype="https://schema.org/Question">\n<h3 itemprop="name">${f.question}</h3>\n<div itemscope itemprop="acceptedAnswer" itemtype="https://schema.org/Answer">\n<p itemprop="text">${f.answer}</p>\n</div>\n</div>`
           )
-          .join("\n")}`
+          .join("\n")}\n</div>`
       : "";
 
   const fullHtml = normalizedHtmlContent + faqHtml;
