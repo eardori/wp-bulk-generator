@@ -56,7 +56,8 @@ function jobPath(id: string): string {
 }
 
 export function generateJobId(): string {
-  return randomBytes(8).toString("hex");
+  const timestamp = Date.now().toString(36);
+  return `${timestamp}-${randomBytes(4).toString("hex")}`;
 }
 
 export function createJob(input: ContentJobInput): ContentJob {

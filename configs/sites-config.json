@@ -163,5 +163,38 @@
       "sidebar": false,
       "featured_image_style": "thumbnail"
     }
+  },
+  {
+    "site_slug": "myground",
+    "domain": "myground.website",
+    "site_title": "마이그라운드 — 취미와 미식의 솔직 리뷰",
+    "tagline": "직접 경험한 취미·맛집·카페·여행지 리뷰 기록",
+    "persona": {
+      "name": "도윤",
+      "age": 31,
+      "concern": "취미/미식",
+      "expertise": "중급",
+      "tone": "친근",
+      "bio": "주말마다 새로운 맛집과 취미를 탐험하는 31살 직장인입니다. 캠핑, 카페 투어, 홈쿠킹, 와인까지 직접 해보고 솔직하게 기록합니다."
+    },
+    "color_scheme": {
+      "primary": "#2B2D42",
+      "secondary": "#F7F7F8",
+      "accent": "#EF8354",
+      "style": "clean"
+    },
+    "categories": ["맛집리뷰", "카페", "캠핑", "홈쿠킹", "여행", "취미생활"],
+    "initial_post_topics": [
+      "서울 성수동 브런치 카페 TOP 5 — 직접 가본 솔직 후기 (2026)",
+      "초보 캠핑 장비 추천 — 텐트·버너·침낭 가성비 세트 비교",
+      "집에서 만드는 스테이크 완벽 가이드 — 수비드 vs 팬시어링",
+      "제주도 숨은 맛집 3곳 — 관광객 없는 현지인 단골집",
+      "입문자용 와인 추천 5선 — 마트에서 살 수 있는 2만원대 와인"
+    ],
+    "layout_preference": {
+      "homepage": "card-grid",
+      "sidebar": false,
+      "featured_image_style": "full-width"
+    }
   }
 ]

@@ -29,6 +29,10 @@ export async function getBrowser(): Promise<Browser> {
         browserInstance = null;
       });
       return browser;
+    })
+    .catch((err) => {
+      browserPromise = null;
+      throw err;
     });
 
   return browserPromise;

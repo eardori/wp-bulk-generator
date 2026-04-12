@@ -35,7 +35,10 @@ export function useSessionPersist<T>({
   const storageKey = `${STORAGE_PREFIX}${key}`;
   const restoredRef = useRef(false);
   const onRestoreRef = useRef(onRestore);
-  onRestoreRef.current = onRestore;
+
+  useEffect(() => {
+    onRestoreRef.current = onRestore;
+  }, [onRestore]);
 
   // 1. 마운트 시 저장된 상태 복원
   useEffect(() => {

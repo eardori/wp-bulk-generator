@@ -295,18 +295,18 @@ async function collectNaverPlaceMenuItems(
 
 export async function scrapeRoutes(app: FastifyInstance) {
   // ─── POST /scrape/oliveyoung ───────────────────────────────
-  app.post("/scrape/oliveyoung", async (req) => {
+  app.post("/scrape/oliveyoung", async (req, reply) => {
     const { url } = req.body as { url: string };
 
     if (!url) {
-      return { error: "URL is required" };
+      return reply.code(400).send({ error: "URL is required" });
     }
 
     // Extract goodsNo from URL query param
     const urlObj = new URL(url);
     const goodsNo = urlObj.searchParams.get("goodsNo");
     if (!goodsNo) {
-      return { error: "goodsNo query parameter not found in URL" };
+      return reply.code(400).send({ error: "goodsNo query parameter not found in URL" });
     }
 
     const browser: Browser = await getBrowser();
@@ -429,21 +429,21 @@ export async function scrapeRoutes(app: FastifyInstance) {
 
       return result;
     } catch (err) {
-      return {
+      return reply.code(500).send({
         error: "Olive Young scrape failed",
         detail: err instanceof Error ? err.message : "Unknown error",
-      };
+      });
     } finally {
       await context.close();
     }
   });
 
   // ─── POST /scrape/naver-place ──────────────────────────────
-  app.post("/scrape/naver-place", async (req) => {
+  app.post("/scrape/naver-place", async (req, reply) => {
     const { url } = req.body as { url: string };
 
     if (!url) {
-      return { error: "URL is required" };
+      return reply.code(400).send({ error: "URL is required" });
     }
 
     // Extract placeId from URL patterns: /place/\d+, /restaurant/\d+, etc.
@@ -451,7 +451,7 @@ export async function scrapeRoutes(app: FastifyInstance) {
       /\/(?:place|restaurant|cafe|hospital|beauty|accommodation)\/(\d+)/
     );
     if (!placeIdMatch) {
-      return { error: "Could not extract placeId from URL" };
+      return reply.code(400).send({ error: "Could not extract placeId from URL" });
     }
     const placeId = placeIdMatch[1];
 
@@ -473,7 +473,7 @@ export async function scrapeRoutes(app: FastifyInstance) {
       ]);
 
       if (!navigated) {
-        return { error: "Failed to navigate to Naver Place page" };
+        return reply.code(502).send({ error: "Failed to navigate to Naver Place page" });
       }
 
       // Extract place data from DOM
@@ -588,7 +588,7 @@ export async function scrapeRoutes(app: FastifyInstance) {
           seenReviews.add(reviewKey);
           reviews.push({
             text: item.text.trim(),
-            rating: 0,
+            rating: 5,
             images: item.images.map((imgUrl) => ({
               originalUrl: imgUrl,
               thumbnailUrl: imgUrl,
@@ -630,10 +630,10 @@ export async function scrapeRoutes(app: FastifyInstance) {
 
       return result;
     } catch (err) {
-      return {
+      return reply.code(500).send({
         error: "Naver Place scrape failed",
         detail: err instanceof Error ? err.message : "Unknown error",
-      };
+      });
     } finally {
       await context.close();
     }

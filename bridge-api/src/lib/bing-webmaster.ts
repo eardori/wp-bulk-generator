@@ -258,11 +258,13 @@ export async function syncBingSite(siteUrl: string): Promise<BingSyncResult> {
       (error.apiMessage || "").includes("Max limit reached for number of sites registered under this domain")
     ) {
       notes.push("Bing site registration limit reached for this domain");
+      errors.push(`[CRITICAL] Bing 사이트 등록 한도 초과 — ${normalizedSiteUrl} 미등록. DNS-TXT 도메인 레벨 검증을 권장합니다.`);
     } else {
       errors.push(error instanceof Error ? error.message : String(error));
     }
   }
 
+  // static sitemap 제출
   try {
     await callBing("SubmitFeed", {
       siteUrl: normalizedSiteUrl,
@@ -271,6 +273,17 @@ export async function syncBingSite(siteUrl: string): Promise<BingSyncResult> {
     feedSubmitted = true;
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
+  }
+
+  // Yoast/WordPress 기본 sitemap도 함께 제출 (항상 최신 상태)
+  const wpSitemapUrl = `${normalizedSiteUrl}wp-sitemap.xml`;
+  try {
+    await callBing("SubmitFeed", {
+      siteUrl: normalizedSiteUrl,
+      feedUrl: wpSitemapUrl,
+    });
+  } catch {
+    // wp-sitemap.xml 제출 실패는 치명적이지 않으므로 무시
   }
 
   return {

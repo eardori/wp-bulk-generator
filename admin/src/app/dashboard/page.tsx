@@ -356,7 +356,8 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    load();
+    const t = setTimeout(() => load(), 0);
+    return () => clearTimeout(t);
   }, [load]);
 
   // ── Derived ────────────────────────────────────────────────────

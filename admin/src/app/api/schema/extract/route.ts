@@ -1,4 +1,4 @@
-import { createBridgeToken, getBridgeUrl, bridgeFetch, parseBridgeJsonResponse } from "@/lib/bridge";
+import { bridgeFetch, parseBridgeJsonResponse } from "@/lib/bridge";
 
 export async function POST(req: Request) {
   const body = await req.json();

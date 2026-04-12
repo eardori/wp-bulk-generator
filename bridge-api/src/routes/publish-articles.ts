@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { execFileSync, execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import type { FastifyInstance } from "fastify";
 import { tmpdir } from "os";
@@ -166,14 +166,12 @@ function buildDashboardPostEntry(article: GeneratedArticle, result: PublishResul
 // ── Image helpers ────────────────────────────────────────────────────────────
 
 function downloadImageWithCurl(url: string): Buffer {
-  const escapedUrl = url.replace(/'/g, "'\\''");
-  const cmd = [
-    "curl", "-s", "-L", "--max-time", "20",
+  const result = execFileSync("curl", [
+    "-s", "-L", "--max-time", "20",
     "-H", "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
     "-H", "Referer: https://smartstore.naver.com/",
-    `'${escapedUrl}'`,
-  ].join(" ");
-  const result = execSync(cmd, { timeout: 25000, maxBuffer: 20 * 1024 * 1024, encoding: "buffer" });
+    url,
+  ], { timeout: 25000, maxBuffer: 20 * 1024 * 1024 });
   if (!result || result.length < 100) throw new Error("Empty image response");
   return result;
 }
@@ -399,27 +397,12 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
   const isoDate = now.toISOString().split('T')[0];
   finalHtml += `\n<p class="last-updated" style="color:#888;font-size:0.85em;margin-top:2em;text-align:right;">마지막 업데이트: <time datetime="${isoDate}">${dateStr}</time></p>`;
 
-  // ── FAQPage JSON-LD ──
-  if (article.faqSchema && article.faqSchema.length > 0) {
-    const faqJsonLd = {
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      "mainEntity": article.faqSchema.map((faq) => ({
-        "@type": "Question",
-        "name": faq.question,
-        "acceptedAnswer": {
-          "@type": "Answer",
-          "text": faq.answer,
-        },
-      })),
-    };
-    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(faqJsonLd)}</script>`;
-  }
-
-  // ── Article JSON-LD (with author sameAs) ──
+  // ── 통합 JSON-LD @graph 구성 (Bing 파서 호환성 향상) ──
   const authorUrl = `${baseUrl}/author/${(site.admin_user || "admin").toLowerCase()}/`;
-  const articleJsonLd: Record<string, unknown> = {
-    "@context": "https://schema.org",
+  const graphItems: Record<string, unknown>[] = [];
+
+  // Article schema
+  graphItems.push({
     "@type": "Article",
     "headline": article.title,
     "description": article.metaDescription || article.excerpt,
@@ -449,12 +432,25 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
     },
     "url": canonicalUrl,
     ...(article.tags?.length > 0 ? { "keywords": article.tags.join(", ") } : {}),
-  };
-  finalHtml += `\n<script type="application/ld+json">${JSON.stringify(articleJsonLd)}</script>`;
+  });
 
-  // ── BreadcrumbList JSON-LD ──
-  const breadcrumbJsonLd = {
-    "@context": "https://schema.org",
+  // FAQPage schema
+  if (article.faqSchema && article.faqSchema.length > 0) {
+    graphItems.push({
+      "@type": "FAQPage",
+      "mainEntity": article.faqSchema.map((faq) => ({
+        "@type": "Question",
+        "name": faq.question,
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": faq.answer,
+        },
+      })),
+    });
+  }
+
+  // BreadcrumbList schema
+  graphItems.push({
     "@type": "BreadcrumbList",
     "itemListElement": [
       {
@@ -476,16 +472,16 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
         "item": canonicalUrl,
       },
     ],
-  };
-  finalHtml += `\n<script type="application/ld+json">${JSON.stringify(breadcrumbJsonLd)}</script>`;
+  });
 
-  // ── HowTo JSON-LD (auto-extract from <ol> lists) ──
+  // HowTo schema (auto-extract from <ol> lists)
   const howToJsonLd = buildHowToSchema(cleanedHtml, article.title);
   if (howToJsonLd) {
-    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(howToJsonLd)}</script>`;
+    const { "@context": _ctx, ...howToWithoutContext } = howToJsonLd;
+    graphItems.push(howToWithoutContext);
   }
 
-  // ── Business / Product Schema ──
+  // Business / Product schema
   const businessJsonLd = buildBusinessSchemaFromHtml({
     title: article.title,
     excerpt: article.metaDescription || article.excerpt,
@@ -495,13 +491,22 @@ function buildFinalHtml(article: GeneratedArticle, site: SiteCredential, replace
   });
 
   if (businessJsonLd) {
-    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(businessJsonLd)}</script>`;
+    const { "@context": _ctx, ...bizWithoutContext } = businessJsonLd;
+    graphItems.push(bizWithoutContext);
   } else {
     const productReviewJsonLd = buildProductReviewSchema(article, site);
     if (productReviewJsonLd) {
-      finalHtml += `\n<script type="application/ld+json">${JSON.stringify(productReviewJsonLd)}</script>`;
+      const { "@context": _ctx, ...prodWithoutContext } = productReviewJsonLd;
+      graphItems.push(prodWithoutContext);
     }
   }
+
+  // 단일 @graph JSON-LD 블록으로 출력
+  const unifiedJsonLd = {
+    "@context": "https://schema.org",
+    "@graph": graphItems,
+  };
+  finalHtml += `\n<script type="application/ld+json">${JSON.stringify(unifiedJsonLd)}</script>`;
 
   return finalHtml;
 }
@@ -1270,8 +1275,19 @@ async function deployIndexNowKeyFile(site: SiteCredential): Promise<void> {
         rmSync(tempDir, { recursive: true, force: true });
       }
     }
-  } catch {
-    // best-effort
+
+    // 키 파일 접근성 검증
+    const keyUrl = `https://${site.domain}/${keyFileName}`;
+    try {
+      const resp = await fetch(keyUrl, { signal: AbortSignal.timeout(10_000) });
+      if (!resp.ok) {
+        console.warn(`[IndexNow] 키 파일 검증 실패: ${keyUrl} → HTTP ${resp.status}`);
+      }
+    } catch (verifyErr) {
+      console.warn(`[IndexNow] 키 파일 접근 불가: ${keyUrl} — ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`);
+    }
+  } catch (err) {
+    console.warn(`[IndexNow] 키 파일 배포 실패 (${site.domain}): ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -1337,7 +1353,8 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
             };
           });
           if (isBingWebmasterSyncEnabled()) {
-            const bingResult = await submitBingUrls([result.postUrl]);
+            const siteBaseUrl = new URL(result.postUrl).origin;
+            const bingResult = await submitBingUrls([result.postUrl], siteBaseUrl);
             if (bingResult.errors.length > 0) {
               send({
                 type: "progress",
