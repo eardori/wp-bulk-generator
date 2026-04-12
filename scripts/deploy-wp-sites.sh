@@ -356,10 +356,66 @@ ensure_allmyreview_certificate() {
   fi
 }
 
+ensure_individual_certificate() {
+  local domain="$1"
+
+  if [ "${SKIP_CERTBOT:-0}" = "1" ]; then
+    echo "  ↷ SKIP_CERTBOT=1 설정으로 개별 인증서 발급을 건너뜁니다."
+    return 1
+  fi
+
+  if ! command -v certbot >/dev/null 2>&1; then
+    echo "  ⚠ certbot이 없어 개별 SSL 인증서를 발급하지 못했습니다."
+    return 1
+  fi
+
+  local cert_dir="/etc/letsencrypt/live/$domain"
+  if [[ -f "$cert_dir/fullchain.pem" ]] && [[ -f "$cert_dir/privkey.pem" ]]; then
+    echo "  ✓ 개별 SSL 인증서 이미 존재: $domain"
+    return 0
+  fi
+
+  echo "--- 개별 SSL 인증서 발급: $domain ---"
+
+  local certbot_args=(
+    certbot certonly
+    --nginx
+    --non-interactive
+    -d "$domain"
+  )
+
+  if [ -n "$CERTBOT_EMAIL" ]; then
+    certbot_args+=(--agree-tos --email "$CERTBOT_EMAIL")
+  else
+    certbot_args+=(--agree-tos --register-unsafely-without-email)
+  fi
+
+  if "${certbot_args[@]}"; then
+    nginx -t && systemctl reload nginx
+    echo "  ✓ 개별 SSL 인증서 발급 완료: $domain"
+    return 0
+  else
+    echo "  ⚠ 개별 SSL 인증서 발급 실패: $domain (HTTP로 폴백)"
+    return 1
+  fi
+}
+
+get_individual_cert_dir() {
+  local domain="$1"
+  local cert_dir="/etc/letsencrypt/live/$domain"
+  if [[ -f "$cert_dir/fullchain.pem" ]] && [[ -f "$cert_dir/privkey.pem" ]]; then
+    echo "$cert_dir"
+    return 0
+  fi
+  return 1
+}
+
 site_url_for_domain() {
   local domain
   domain="$(normalize_domain "$1")"
   if [[ "$domain" == *.allmyreview.site ]]; then
+    printf 'https://%s' "$domain"
+  elif get_individual_cert_dir "$domain" >/dev/null 2>&1; then
     printf 'https://%s' "$domain"
   else
     printf 'http://%s' "$domain"
@@ -625,7 +681,117 @@ server {
 }
 NGINX
   else
-    cat > "$nginx_path" << NGINX
+    # 개별 도메인: SSL 인증서 확인 후 HTTPS 또는 HTTP 설정
+    local ind_cert_dir
+    ind_cert_dir="$(get_individual_cert_dir "$domain" 2>/dev/null || true)"
+
+    if [[ -n "$ind_cert_dir" ]]; then
+      # 개별 SSL 인증서 존재 → HTTPS 설정
+      cat > "$nginx_path" << NGINX
+server {
+    listen 80;
+    server_name $domain;
+
+    location /.well-known/acme-challenge/ { root $site_dir; }
+    location / { return 301 https://\$host\$request_uri; }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $domain;
+    root $site_dir;
+    index index.php index.html;
+
+    ssl_certificate $ind_cert_dir/fullchain.pem;
+    ssl_certificate_key $ind_cert_dir/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    set \$skip_cache 0;
+    if (\$request_method = POST) { set \$skip_cache 1; }
+    if (\$request_uri ~* "/wp-admin/|/xmlrpc.php|wp-.*.php|/feed/|index.php|sitemap(_index)?.xml") {
+        set \$skip_cache 1;
+    }
+    if (\$http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_no_cache|wordpress_logged_in") {
+        set \$skip_cache 1;
+    }
+
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options SAMEORIGIN;
+    add_header Referrer-Policy "strict-origin-when-cross-origin";
+    include $SCANNER_BLOCK_SNIPPET;
+
+    if (\$args ~ "(^|&)p=") { set \$skip_cache 1; }
+    if (\$args ~ "(^|&)p=") { set \$invalid_post_query 1; }
+    if (\$arg_p ~ "^[0-9]+\$") { set \$invalid_post_query 0; }
+    if (\$invalid_post_query = 1) { return 301 https://\$host\$uri; }
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+
+    location ~ \\.php\$ {
+        include fastcgi_params;
+        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param HTTPS on;
+        fastcgi_param SERVER_PORT 443;
+        fastcgi_connect_timeout 30s;
+        fastcgi_send_timeout 120s;
+        fastcgi_read_timeout 120s;
+
+        fastcgi_cache WPCACHE;
+        fastcgi_cache_valid 200 10d;
+        fastcgi_cache_valid 404 1m;
+        fastcgi_cache_lock on;
+        fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
+        fastcgi_cache_bypass \$skip_cache;
+        fastcgi_no_cache \$skip_cache;
+        add_header X-Cache \$upstream_cache_status;
+    }
+
+    location = /robots.txt {
+        access_log off;
+        log_not_found off;
+    }
+
+    location = /llms.txt {
+        access_log off;
+        log_not_found off;
+        default_type text/plain;
+    }
+
+    location = /llms-full.txt {
+        access_log off;
+        log_not_found off;
+        default_type text/plain;
+    }
+
+    location ~ /sitemap.*\\.xml\$ {
+        try_files \$uri /index.php?\$args;
+        expires 5m;
+        add_header Cache-Control "public";
+    }
+
+    location ~* \\.(aspx|asp|ashx|axd|bak|old|orig|save|sql|ini|log|sh|pem|yml|yaml|dist)\$ {
+        return 404;
+    }
+
+    location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff2|woff|ttf|eot)\$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+
+    location ~ /\\. { deny all; }
+    location ~* /wp-config.php { deny all; }
+    location ~* /readme.html { deny all; }
+    location ~* /license.txt { deny all; }
+}
+NGINX
+    else
+      # SSL 인증서 없음 → HTTP only (certbot ACME 챌린지 포함)
+      cat > "$nginx_path" << NGINX
 server {
     listen 80;
     server_name $domain;
@@ -649,7 +815,7 @@ server {
     if (\$args ~ "(^|&)p=") { set \$skip_cache 1; }
     if (\$args ~ "(^|&)p=") { set \$invalid_post_query 1; }
     if (\$arg_p ~ "^[0-9]+\$") { set \$invalid_post_query 0; }
-    if (\$invalid_post_query = 1) { return 301 https://\$host\$uri; }
+    if (\$invalid_post_query = 1) { return 301 http://\$host\$uri; }
 
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
@@ -712,6 +878,7 @@ server {
     location ~* /license.txt { deny all; }
 }
 NGINX
+    fi
   fi
 
   ln -sf "$nginx_path" "/etc/nginx/sites-enabled/$slug"
@@ -1864,6 +2031,33 @@ if [ "${#SUCCESSFUL_SITES[@]}" -gt 0 ]; then
   purge_fastcgi_cache
 fi
 ensure_allmyreview_certificate
+
+# 비-allmyreview 개별 도메인 SSL 발급 및 Nginx HTTPS 전환
+for i in $(seq 0 $(($SITE_COUNT - 1))); do
+  IND_DOMAIN=$(jq -r ".[$i].domain // empty" "$CONFIG_FILE")
+  IND_DOMAIN="$(normalize_domain "$IND_DOMAIN")"
+  IND_SLUG=$(jq -r ".[$i].site_slug" "$CONFIG_FILE")
+  IND_SITE_DIR="$WEB_ROOT/$IND_SLUG"
+
+  # allmyreview 도메인은 공유 인증서 사용, .local은 제외
+  [[ "$IND_DOMAIN" == *.allmyreview.site ]] && continue
+  [[ "$IND_DOMAIN" == *.local ]] && continue
+  [[ -z "$IND_DOMAIN" ]] && continue
+  # 이미 설치된 사이트만 대상
+  [[ -d "$IND_SITE_DIR" ]] || continue
+
+  if ensure_individual_certificate "$IND_DOMAIN"; then
+    echo "  → Nginx HTTPS 설정 재생성: $IND_DOMAIN"
+    write_nginx_config "$IND_SLUG" "$IND_DOMAIN" "$IND_SITE_DIR"
+
+    # WordPress home/siteurl을 HTTPS로 업데이트
+    IND_NEW_URL="https://$IND_DOMAIN"
+    wp option update home "$IND_NEW_URL" --path="$IND_SITE_DIR" --allow-root 2>/dev/null || true
+    wp option update siteurl "$IND_NEW_URL" --path="$IND_SITE_DIR" --allow-root 2>/dev/null || true
+  fi
+done
+
+nginx -t && systemctl reload nginx 2>/dev/null || true
 ensure_system_cron_runner
 
 if [ "${#SUCCESSFUL_SITES[@]}" -gt 0 ] && [ -x "$POST_DEPLOY_REPAIR_SCRIPT" -o -f "$POST_DEPLOY_REPAIR_SCRIPT" ]; then
