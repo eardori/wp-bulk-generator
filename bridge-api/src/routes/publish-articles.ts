@@ -11,6 +11,7 @@ import { buildBusinessSchemaFromHtml, stripReviewReferenceMarkers } from "../lib
 import {
   isBingWebmasterSyncEnabled,
   submitBingUrls,
+  syncBingSite,
 } from "../lib/bing-webmaster.js";
 import {
   isIndexNowEnabled,
@@ -1354,6 +1355,8 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
           });
           if (isBingWebmasterSyncEnabled()) {
             const siteBaseUrl = new URL(result.postUrl).origin;
+            // 사이트가 Bing에 미등록일 수 있으므로 URL 제출 전 자동 등록
+            await syncBingSite(siteBaseUrl);
             const bingResult = await submitBingUrls([result.postUrl], siteBaseUrl);
             if (bingResult.errors.length > 0) {
               send({
