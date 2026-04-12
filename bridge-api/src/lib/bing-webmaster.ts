@@ -13,9 +13,7 @@ const BING_WEBMASTER_RETRY_BASE_MS = Math.max(
   250,
   Number(process.env.BING_WEBMASTER_RETRY_BASE_MS || 2000)
 );
-const BING_URL_SUBMISSION_SITE_URL = (
-  process.env.BING_URL_SUBMISSION_SITE_URL || "https://allmyreview.site"
-).trim();
+const BING_URL_SUBMISSION_SITE_URL = (process.env.BING_URL_SUBMISSION_SITE_URL || "").trim();
 const BING_URL_SUBMISSION_BATCH_SIZE = Math.max(
   1,
   Number(process.env.BING_URL_SUBMISSION_BATCH_SIZE || 100)
@@ -32,6 +30,7 @@ export type BingSyncResult = {
 
 export type BingUrlSubmissionResult = {
   siteUrl: string;
+  siteUrls: string[];
   submitted: number;
   batches: number;
   errors: string[];
@@ -167,42 +166,76 @@ function normalizeSubmissionUrls(urls: string[]) {
   );
 }
 
+function groupSubmissionUrlsBySite(urls: string[]) {
+  const groups = new Map<string, string[]>();
+
+  for (const url of urls) {
+    let siteUrl = "";
+    try {
+      siteUrl = normalizeSiteUrl(new URL(url).origin);
+    } catch {
+      continue;
+    }
+
+    const current = groups.get(siteUrl);
+    if (current) {
+      current.push(url);
+    } else {
+      groups.set(siteUrl, [url]);
+    }
+  }
+
+  return groups;
+}
+
 export async function submitBingUrls(
   urls: string[],
   siteUrl = BING_URL_SUBMISSION_SITE_URL
 ): Promise<BingUrlSubmissionResult> {
-  const normalizedSiteUrl = normalizeSiteUrl(siteUrl);
   const normalizedUrls = normalizeSubmissionUrls(urls);
   const errors: string[] = [];
+  const normalizedSiteUrl = siteUrl ? normalizeSiteUrl(siteUrl) : "";
 
   if (normalizedUrls.length === 0) {
     return {
       siteUrl: normalizedSiteUrl,
+      siteUrls: normalizedSiteUrl ? [normalizedSiteUrl] : [],
       submitted: 0,
       batches: 0,
       errors,
     };
   }
 
-  const batches = chunkUrls(normalizedUrls, BING_URL_SUBMISSION_BATCH_SIZE);
+  const groupedUrls = normalizedSiteUrl
+    ? new Map([[normalizedSiteUrl, normalizedUrls]])
+    : groupSubmissionUrlsBySite(normalizedUrls);
+  const siteUrls = Array.from(groupedUrls.keys());
   let submitted = 0;
+  let totalBatches = 0;
 
-  for (const batch of batches) {
-    try {
-      await callBing("SubmitUrlBatch", {
-        siteUrl: normalizedSiteUrl,
-        urlList: batch,
-      });
-      submitted += batch.length;
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
+  for (const [submissionSiteUrl, submissionUrls] of groupedUrls) {
+    const batches = chunkUrls(submissionUrls, BING_URL_SUBMISSION_BATCH_SIZE);
+    totalBatches += batches.length;
+
+    for (const batch of batches) {
+      try {
+        await callBing("SubmitUrlBatch", {
+          siteUrl: submissionSiteUrl,
+          urlList: batch,
+        });
+        submitted += batch.length;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`[${submissionSiteUrl}] ${message}`);
+      }
     }
   }
 
   return {
-    siteUrl: normalizedSiteUrl,
+    siteUrl: normalizedSiteUrl || siteUrls[0] || "",
+    siteUrls,
     submitted,
-    batches: batches.length,
+    batches: totalBatches,
     errors,
   };
 }

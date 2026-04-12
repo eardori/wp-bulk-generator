@@ -5,7 +5,6 @@ Submit published WordPress post URLs to the Bing URL Submission API.
 Usage:
   python3 scripts/bing-submit-urls.py \
     --api-key "$BING_WEBMASTER_API_KEY" \
-    --site-url "https://allmyreview.site" \
     --web-root /var/www
 """
 
@@ -142,10 +141,23 @@ def chunked(values: list[str], chunk_size: int) -> list[list[str]]:
     return [values[index : index + chunk_size] for index in range(0, len(values), chunk_size)]
 
 
+def origin_site_url(value: str) -> str:
+    parsed = urllib.parse.urlparse(normalize_url(value))
+    return normalize_url(f"{parsed.scheme}://{parsed.netloc}/")
+
+
+def group_urls_by_site(urls: list[str]) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for url in urls:
+        site_url = origin_site_url(url)
+        grouped.setdefault(site_url, []).append(url)
+    return grouped
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--api-key", required=True)
-    parser.add_argument("--site-url", required=True)
+    parser.add_argument("--site-url")
     parser.add_argument("--web-root", default="/var/www")
     parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--max-urls", type=int, default=0)
@@ -156,7 +168,7 @@ def main() -> int:
     parser.add_argument("--state-file", default="/tmp/bing-submit-urls-state.json")
     args = parser.parse_args()
 
-    property_url = normalize_url(args.site_url)
+    property_url = normalize_url(args.site_url) if args.site_url else ""
     web_root = Path(args.web_root)
     state_path = Path(args.state_file)
 
@@ -187,9 +199,11 @@ def main() -> int:
         print("No URLs selected for submission")
         return 0
 
+    grouped_urls = {property_url: urls} if property_url else group_urls_by_site(urls)
     failed_batches: list[dict[str, object]] = []
     state: dict[str, object] = {
-        "siteUrl": property_url,
+        "siteUrl": property_url or "auto",
+        "siteUrls": sorted(grouped_urls.keys()),
         "source": source_label,
         "totalUrls": len(urls),
         "submittedUrls": len(urls),
@@ -200,42 +214,55 @@ def main() -> int:
         "failedBatches": failed_batches,
     }
 
-    for index, batch in enumerate(chunked(urls, max(1, args.batch_size)), 1):
-        status = 0
-        body = ""
-        ok = False
-        for attempt in range(1, args.max_retries + 1):
-            status, body = call_bing_allow_error(
-                args.api_key,
-                "SubmitUrlBatch",
-                {
-                    "siteUrl": property_url,
-                    "urlList": batch,
-                },
-            )
-            if 200 <= status < 300:
-                ok = True
-                break
-            if not is_throttle(status, body):
-                break
-            print(f"[{index}] RETRY {attempt} status={status} body={body[:160]}")
-            time.sleep(min(120, args.sleep_seconds * attempt))
+    batch_index = 0
+    for submission_site_url, site_urls in grouped_urls.items():
+        for batch in chunked(site_urls, max(1, args.batch_size)):
+            batch_index += 1
+            status = 0
+            body = ""
+            ok = False
+            for attempt in range(1, args.max_retries + 1):
+                status, body = call_bing_allow_error(
+                    args.api_key,
+                    "SubmitUrlBatch",
+                    {
+                        "siteUrl": submission_site_url,
+                        "urlList": batch,
+                    },
+                )
+                if 200 <= status < 300:
+                    ok = True
+                    break
+                if not is_throttle(status, body):
+                    break
+                print(
+                    f"[{batch_index}] RETRY site={submission_site_url} "
+                    f"status={status} body={body[:160]}"
+                )
+                time.sleep(min(120, args.sleep_seconds * attempt))
 
-        if ok:
-            state["submitted"] = int(state["submitted"]) + len(batch)
-            print(f"[{index}] OK batch={len(batch)} status={status}")
-        else:
-            failed = {
-                "batchIndex": index,
-                "status": status,
-                "body": body[:500],
-                "urls": batch,
-            }
-            failed_batches.append(failed)
-            print(f"[{index}] FAIL batch={len(batch)} status={status} body={body[:200]}")
+            if ok:
+                state["submitted"] = int(state["submitted"]) + len(batch)
+                print(
+                    f"[{batch_index}] OK site={submission_site_url} "
+                    f"batch={len(batch)} status={status}"
+                )
+            else:
+                failed = {
+                    "batchIndex": batch_index,
+                    "siteUrl": submission_site_url,
+                    "status": status,
+                    "body": body[:500],
+                    "urls": batch,
+                }
+                failed_batches.append(failed)
+                print(
+                    f"[{batch_index}] FAIL site={submission_site_url} "
+                    f"batch={len(batch)} status={status} body={body[:200]}"
+                )
 
-        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
-        time.sleep(args.sleep_seconds)
+            state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+            time.sleep(args.sleep_seconds)
 
     print("SUMMARY", json.dumps(state, ensure_ascii=False))
     return 0
