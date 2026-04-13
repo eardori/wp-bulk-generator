@@ -1354,30 +1354,27 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
             };
           });
           if (isBingWebmasterSyncEnabled()) {
-            const postOrigin = new URL(result.postUrl).origin;
-            const postHost = new URL(result.postUrl).hostname;
-            // 서브도메인인 경우 루트 도메인을 siteUrl로 사용 (Bing 인증 단위)
-            const domainParts = postHost.split(".");
-            const rootDomain = domainParts.length > 2
-              ? domainParts.slice(-2).join(".")
-              : postHost;
-            const bingSiteUrl = `https://${rootDomain}`;
-            await syncBingSite(bingSiteUrl);
-            const bingResult = await submitBingUrls([result.postUrl], bingSiteUrl);
-            if (bingResult.errors.length > 0) {
-              send({
-                type: "progress",
-                articleId: article.id,
-                siteSlug: article.siteSlug,
-                message: `Bing URL 제출 경고: ${bingResult.errors[0]}`,
-              });
-            } else {
-              send({
-                type: "progress",
-                articleId: article.id,
-                siteSlug: article.siteSlug,
-                message: `Bing URL 제출 완료`,
-              });
+            // SubmitUrlBatch는 서브도메인 구조에서 NotAuthorized 발생 가능
+            // IndexNow가 주요 색인 경로이므로 SubmitUrlBatch 실패는 조용히 처리
+            try {
+              const postHost = new URL(result.postUrl).hostname;
+              const domainParts = postHost.split(".");
+              const rootDomain = domainParts.length > 2
+                ? domainParts.slice(-2).join(".")
+                : postHost;
+              const bingSiteUrl = `https://${rootDomain}`;
+              await syncBingSite(bingSiteUrl);
+              const bingResult = await submitBingUrls([result.postUrl], bingSiteUrl);
+              if (bingResult.submitted > 0) {
+                send({
+                  type: "progress",
+                  articleId: article.id,
+                  siteSlug: article.siteSlug,
+                  message: `Bing URL 제출 완료`,
+                });
+              }
+            } catch {
+              // IndexNow가 주요 색인 경로이므로 SubmitUrlBatch 실패는 무시
             }
           }
           // IndexNow — 즉시 색인 요청 (Bing, Yandex, Naver 등)
