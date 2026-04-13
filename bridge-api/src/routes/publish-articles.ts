@@ -1354,10 +1354,16 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
             };
           });
           if (isBingWebmasterSyncEnabled()) {
-            const siteBaseUrl = new URL(result.postUrl).origin;
-            // 사이트가 Bing에 미등록일 수 있으므로 URL 제출 전 자동 등록
-            await syncBingSite(siteBaseUrl);
-            const bingResult = await submitBingUrls([result.postUrl], siteBaseUrl);
+            const postOrigin = new URL(result.postUrl).origin;
+            const postHost = new URL(result.postUrl).hostname;
+            // 서브도메인인 경우 루트 도메인을 siteUrl로 사용 (Bing 인증 단위)
+            const domainParts = postHost.split(".");
+            const rootDomain = domainParts.length > 2
+              ? domainParts.slice(-2).join(".")
+              : postHost;
+            const bingSiteUrl = `https://${rootDomain}`;
+            await syncBingSite(bingSiteUrl);
+            const bingResult = await submitBingUrls([result.postUrl], bingSiteUrl);
             if (bingResult.errors.length > 0) {
               send({
                 type: "progress",
