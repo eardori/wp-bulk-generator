@@ -7,6 +7,9 @@ CREDS_FILE="${CREDS_FILE:-/home/ubuntu/wp-bulk-generator/bridge-api/data/wp-site
 ALLMYREVIEW_CERT_NAME="${ALLMYREVIEW_CERT_NAME:-allmyreview-secondary-sites}"
 ALLMYREVIEW_CERT_DIR="/etc/letsencrypt/live/$ALLMYREVIEW_CERT_NAME"
 ALLMYREVIEW_CERT_MAX_NAMES="${ALLMYREVIEW_CERT_MAX_NAMES:-100}"
+MYGROUND_CERT_NAME="${MYGROUND_CERT_NAME:-myground-secondary-sites}"
+MYGROUND_CERT_DIR="/etc/letsencrypt/live/$MYGROUND_CERT_NAME"
+MYGROUND_CERT_MAX_NAMES="${MYGROUND_CERT_MAX_NAMES:-100}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 PROXY_PREFIX="secondary-proxy-"
 ACME_WEBROOT="${ACME_WEBROOT:-/var/www/certbot}"
@@ -82,8 +85,23 @@ cert_covers_domain() {
   local domain
   domain="$(normalize_domain "$1")"
 
-  [[ -f "$ALLMYREVIEW_CERT_DIR/fullchain.pem" ]] || return 1
-  openssl x509 -in "$ALLMYREVIEW_CERT_DIR/fullchain.pem" -noout -text 2>/dev/null | grep -Fq "DNS:$domain"
+  if [[ "$domain" == *.myground.website ]] || [[ "$domain" == "myground.website" ]]; then
+    [[ -f "$MYGROUND_CERT_DIR/fullchain.pem" ]] || return 1
+    openssl x509 -in "$MYGROUND_CERT_DIR/fullchain.pem" -noout -text 2>/dev/null | grep -Fq "DNS:$domain"
+  else
+    [[ -f "$ALLMYREVIEW_CERT_DIR/fullchain.pem" ]] || return 1
+    openssl x509 -in "$ALLMYREVIEW_CERT_DIR/fullchain.pem" -noout -text 2>/dev/null | grep -Fq "DNS:$domain"
+  fi
+}
+
+get_cert_dir_for_domain() {
+  local domain
+  domain="$(normalize_domain "$1")"
+  if [[ "$domain" == *.myground.website ]] || [[ "$domain" == "myground.website" ]]; then
+    printf '%s' "$MYGROUND_CERT_DIR"
+  else
+    printf '%s' "$ALLMYREVIEW_CERT_DIR"
+  fi
 }
 
 build_tunnel_port() {
@@ -139,35 +157,42 @@ resolve_upstream_target() {
   printf '%s' "$host"
 }
 
-ensure_allmyreview_certificate() {
+ensure_shared_certificate() {
+  local cert_name="$1"
+  local cert_dir="$2"
+  local max_names="$3"
+  local label="$4"
+  shift 4
+  local domains=("$@")
+
   if ! command -v certbot >/dev/null 2>&1; then
-    echo "  ⚠ certbot이 없어 primary SSL 확장을 건너뜁니다."
+    echo "  ⚠ certbot이 없어 $label SSL 확장을 건너뜁니다."
     return 0
   fi
 
-  if [ "${#cert_domains[@]}" -eq 0 ]; then
-    echo "  ⚠ allmyreview 도메인이 없어 primary SSL 확장을 건너뜁니다."
+  if [ "${#domains[@]}" -eq 0 ]; then
+    echo "  ⚠ $label 도메인이 없어 SSL 확장을 건너뜁니다."
     return 0
   fi
 
-  if [ "${#cert_domains[@]}" -gt "$ALLMYREVIEW_CERT_MAX_NAMES" ]; then
-    echo "  ⚠ allmyreview 도메인이 ${#cert_domains[@]}개로 많습니다. wildcard 인증서 전환이 필요합니다."
+  if [ "${#domains[@]}" -gt "$max_names" ]; then
+    echo "  ⚠ $label 도메인이 ${#domains[@]}개로 많습니다. wildcard 인증서 전환이 필요합니다."
     return 0
   fi
 
   missing=()
-  for domain in "${cert_domains[@]}"; do
+  for domain in "${domains[@]}"; do
     if ! cert_covers_domain "$domain"; then
       missing+=("$domain")
     fi
   done
 
   if [ "${#missing[@]}" -eq 0 ]; then
-    echo "  ✓ primary SSL 도메인 포함 상태 정상"
+    echo "  ✓ $label SSL 도메인 포함 상태 정상"
     return 0
   fi
 
-  echo "--- primary SSL 확장 (${#missing[@]}개 신규) ---"
+  echo "--- $label SSL 확장 (${#missing[@]}개 신규) ---"
   printf '  + %s\n' "${missing[@]}"
 
   certbot_args=(
@@ -175,7 +200,7 @@ ensure_allmyreview_certificate() {
     --webroot
     -w "$ACME_WEBROOT"
     --non-interactive
-    --cert-name "$ALLMYREVIEW_CERT_NAME"
+    --cert-name "$cert_name"
   )
 
   if [ -n "$CERTBOT_EMAIL" ]; then
@@ -184,19 +209,27 @@ ensure_allmyreview_certificate() {
     certbot_args+=(--agree-tos --register-unsafely-without-email)
   fi
 
-  if [ -f "$ALLMYREVIEW_CERT_DIR/fullchain.pem" ]; then
+  if [ -f "$cert_dir/fullchain.pem" ]; then
     certbot_args+=(--expand)
   fi
 
-  for domain in "${cert_domains[@]}"; do
+  for domain in "${domains[@]}"; do
     certbot_args+=(-d "$domain")
   done
 
   if "${certbot_args[@]}"; then
-    echo "  ✓ primary SSL 확장 완료"
+    echo "  ✓ $label SSL 확장 완료"
   else
-    echo "  ⚠ primary SSL 확장 실패"
+    echo "  ⚠ $label SSL 확장 실패"
   fi
+}
+
+ensure_allmyreview_certificate() {
+  ensure_shared_certificate "$ALLMYREVIEW_CERT_NAME" "$ALLMYREVIEW_CERT_DIR" "$ALLMYREVIEW_CERT_MAX_NAMES" "allmyreview" "${cert_domains[@]}"
+}
+
+ensure_myground_certificate() {
+  ensure_shared_certificate "$MYGROUND_CERT_NAME" "$MYGROUND_CERT_DIR" "$MYGROUND_CERT_MAX_NAMES" "myground" "${myground_cert_domains[@]}"
 }
 
 write_proxy_config() {
@@ -206,6 +239,8 @@ write_proxy_config() {
   local upstream_target="$3"
   local mode="$4"
   local nginx_path="/etc/nginx/sites-available/${PROXY_PREFIX}${slug}"
+  local domain_cert_dir
+  domain_cert_dir="$(get_cert_dir_for_domain "$domain")"
 
   if [ "$mode" = "https" ]; then
     cat > "$nginx_path" <<NGINX
@@ -226,8 +261,8 @@ server {
     listen 443 ssl http2;
     server_name $domain;
 
-    ssl_certificate $ALLMYREVIEW_CERT_DIR/fullchain.pem;
-    ssl_certificate_key $ALLMYREVIEW_CERT_DIR/privkey.pem;
+    ssl_certificate $domain_cert_dir/fullchain.pem;
+    ssl_certificate_key $domain_cert_dir/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
@@ -288,6 +323,7 @@ NGINX
 
 declare -a entries=()
 declare -a cert_domains=()
+declare -a myground_cert_domains=()
 
 while IFS=$'\t' read -r slug domain upstream_host ssh_user key_path; do
   [ -n "$slug" ] || continue
@@ -310,13 +346,21 @@ done < <(
 
 for entry in "${entries[@]}"; do
   IFS=$'\t' read -r _slug domain _upstream_host _ssh_user _key_path <<< "$entry"
-  if [ -n "$domain" ] && [[ "$domain" == *.allmyreview.site ]]; then
-    cert_domains+=("$domain")
+  if [ -n "$domain" ]; then
+    if [[ "$domain" == *.allmyreview.site ]]; then
+      cert_domains+=("$domain")
+    elif [[ "$domain" == *.myground.website ]] || [[ "$domain" == "myground.website" ]]; then
+      myground_cert_domains+=("$domain")
+    fi
   fi
 done
 
 if [ "${#cert_domains[@]}" -gt 0 ]; then
   mapfile -t cert_domains < <(printf '%s\n' "${cert_domains[@]}" | sort -u)
+fi
+
+if [ "${#myground_cert_domains[@]}" -gt 0 ]; then
+  mapfile -t myground_cert_domains < <(printf '%s\n' "${myground_cert_domains[@]}" | sort -u)
 fi
 
 declare -A active=()
@@ -340,6 +384,7 @@ if [ "${#entries[@]}" -eq 0 ]; then
   ensure_scanner_block_snippet
   nginx -t && systemctl reload nginx
   ensure_allmyreview_certificate
+  ensure_myground_certificate
   echo "✓ secondary proxy 대상 사이트 없음"
   exit 0
 fi
@@ -362,6 +407,7 @@ ensure_nginx_hash_settings
 nginx -t && systemctl reload nginx
 
 ensure_allmyreview_certificate
+ensure_myground_certificate
 
 echo "--- secondary proxy HTTPS 구성 ---"
 for entry in "${entries[@]}"; do
