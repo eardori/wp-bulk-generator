@@ -615,6 +615,32 @@ function appendChunkLines(
 }
 
 export async function deployRoutes(app: FastifyInstance) {
+  // proxy sync만 단독 실행 (SSL 인증서 발급 + Nginx 설정 업데이트)
+  app.post("/deploy/proxy-sync", async (req, reply) => {
+    const { send, close } = setupSSE(reply);
+    try {
+      send({ type: "log", message: "--- primary proxy sync 시작 ---" });
+      const output = runSecondaryProxySync();
+      for (const line of output.split(/\r?\n/).filter(Boolean)) {
+        send({ type: "log", message: line });
+      }
+      send({ type: "done", message: "proxy sync 완료" });
+    } catch (error) {
+      const stdout =
+        error && typeof error === "object" && "stdout" in error && Buffer.isBuffer((error as { stdout?: unknown }).stdout)
+          ? (error as { stdout: Buffer }).stdout.toString("utf8") : "";
+      const stderr =
+        error && typeof error === "object" && "stderr" in error && Buffer.isBuffer((error as { stderr?: unknown }).stderr)
+          ? (error as { stderr: Buffer }).stderr.toString("utf8") : "";
+      for (const line of `${stdout}\n${stderr}`.split(/\r?\n/).filter(Boolean)) {
+        send({ type: "log", message: line });
+      }
+      send({ type: "error", message: "proxy sync 실패" });
+    } finally {
+      close();
+    }
+  });
+
   app.post("/deploy", async (req, reply) => {
     const { configs } = req.body as { configs: DeployConfig[] };
 
