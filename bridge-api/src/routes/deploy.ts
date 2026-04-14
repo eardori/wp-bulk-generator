@@ -641,6 +641,42 @@ export async function deployRoutes(app: FastifyInstance) {
     }
   });
 
+  // 모든 myground 사이트의 sitemap을 Bing에 일괄 제출
+  app.post("/deploy/submit-sitemaps", async (req, reply) => {
+    const { send, close } = setupSSE(reply);
+    try {
+      const sites = readExistingSites() as StoredCredential[];
+      const mygroundSites = sites.filter(
+        (s) => s.domain && (s.domain.includes("myground.website"))
+      );
+      send({ type: "log", message: `myground 사이트 ${mygroundSites.length}개 발견` });
+
+      let successCount = 0;
+      for (const site of mygroundSites) {
+        const domain = site.domain!;
+        try {
+          const siteUrl = `https://${domain}`;
+          const result = await syncBingSite(siteUrl);
+          const status = result.feedSubmitted ? "✓ sitemap 제출" : "⚠ sitemap 실패";
+          send({ type: "log", message: `  ${status}: ${domain}` });
+          if (result.errors.length > 0) {
+            for (const err of result.errors) {
+              send({ type: "log", message: `    ${err}` });
+            }
+          }
+          if (result.feedSubmitted) successCount++;
+        } catch (err) {
+          send({ type: "log", message: `  ✗ ${domain}: ${err instanceof Error ? err.message : String(err)}` });
+        }
+      }
+      send({ type: "done", message: `완료: ${successCount}/${mygroundSites.length}개 sitemap 제출` });
+    } catch (error) {
+      send({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      close();
+    }
+  });
+
   app.post("/deploy", async (req, reply) => {
     const { configs } = req.body as { configs: DeployConfig[] };
 
