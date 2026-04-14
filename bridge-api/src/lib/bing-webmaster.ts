@@ -2,6 +2,7 @@ const BING_WEBMASTER_API_BASE =
   process.env.BING_WEBMASTER_API_BASE ||
   "https://ssl.bing.com/webmaster/api.svc/json";
 const BING_WEBMASTER_API_KEY = (process.env.BING_WEBMASTER_API_KEY || "").trim();
+const BING_WEBMASTER_API_KEY_MYGROUND = (process.env.BING_WEBMASTER_API_KEY_MYGROUND || "").trim();
 const BING_WEBMASTER_TIMEOUT_MS = Number(
   process.env.BING_WEBMASTER_TIMEOUT_MS || 15000
 );
@@ -18,6 +19,17 @@ const BING_URL_SUBMISSION_BATCH_SIZE = Math.max(
   1,
   Number(process.env.BING_URL_SUBMISSION_BATCH_SIZE || 100)
 );
+
+/** 도메인에 따라 적절한 Bing Webmaster API 키를 반환 */
+function getApiKeyForDomain(domain?: string): string {
+  if (domain) {
+    const host = domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase();
+    if (host.endsWith(".myground.website") || host === "myground.website") {
+      return BING_WEBMASTER_API_KEY_MYGROUND || BING_WEBMASTER_API_KEY;
+    }
+  }
+  return BING_WEBMASTER_API_KEY;
+}
 
 export type BingSyncResult = {
   siteUrl: string;
@@ -67,14 +79,15 @@ function buildFeedUrl(siteUrl: string) {
   return `${normalized}sitemap_index.xml`;
 }
 
-async function callBing(method: string, payload: Record<string, unknown>) {
-  if (!BING_WEBMASTER_API_KEY) {
+async function callBing(method: string, payload: Record<string, unknown>, domain?: string) {
+  const apiKey = getApiKeyForDomain(domain);
+  if (!apiKey) {
     throw new Error("BING_WEBMASTER_API_KEY is not configured");
   }
 
   for (let attempt = 0; ; attempt += 1) {
     const response = await fetch(
-      `${BING_WEBMASTER_API_BASE}/${method}?apikey=${encodeURIComponent(BING_WEBMASTER_API_KEY)}`,
+      `${BING_WEBMASTER_API_BASE}/${method}?apikey=${encodeURIComponent(apiKey)}`,
       {
         method: "POST",
         headers: {
@@ -136,8 +149,8 @@ async function callBing(method: string, payload: Record<string, unknown>) {
   }
 }
 
-export function isBingWebmasterSyncEnabled() {
-  return Boolean(BING_WEBMASTER_API_KEY);
+export function isBingWebmasterSyncEnabled(domain?: string) {
+  return Boolean(getApiKeyForDomain(domain));
 }
 
 function chunkUrls(urls: string[], chunkSize: number) {
@@ -222,7 +235,7 @@ export async function submitBingUrls(
         await callBing("SubmitUrlBatch", {
           siteUrl: submissionSiteUrl,
           urlList: batch,
-        });
+        }, submissionSiteUrl);
         submitted += batch.length;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -240,6 +253,23 @@ export async function submitBingUrls(
   };
 }
 
+/**
+ * 서브도메인의 루트 도메인 URL을 반환.
+ * 예: https://foo.myground.website/ → https://myground.website/
+ * 루트 도메인이면 그대로 반환.
+ */
+function getRootSiteUrl(normalizedSiteUrl: string): string {
+  try {
+    const url = new URL(normalizedSiteUrl);
+    const parts = url.hostname.split(".");
+    if (parts.length > 2) {
+      url.hostname = parts.slice(-2).join(".");
+      return normalizeSiteUrl(url.origin);
+    }
+  } catch { /* ignore */ }
+  return normalizedSiteUrl;
+}
+
 export async function syncBingSite(siteUrl: string): Promise<BingSyncResult> {
   const normalizedSiteUrl = normalizeSiteUrl(siteUrl);
   const feedUrl = buildFeedUrl(normalizedSiteUrl);
@@ -248,40 +278,49 @@ export async function syncBingSite(siteUrl: string): Promise<BingSyncResult> {
   let added = false;
   let feedSubmitted = false;
 
-  try {
-    await callBing("AddSite", { siteUrl: normalizedSiteUrl });
-    added = true;
-  } catch (error) {
-    if (
-      error instanceof BingWebmasterError &&
-      error.errorCode === 2 &&
-      (error.apiMessage || "").includes("Max limit reached for number of sites registered under this domain")
-    ) {
-      notes.push("Bing site registration limit reached for this domain");
-      errors.push(`[CRITICAL] Bing 사이트 등록 한도 초과 — ${normalizedSiteUrl} 미등록. DNS-TXT 도메인 레벨 검증을 권장합니다.`);
-    } else {
-      errors.push(error instanceof Error ? error.message : String(error));
+  // 서브도메인이면 루트 도메인 사이트에 sitemap을 제출 (개별 AddSite 안 함)
+  const rootSiteUrl = getRootSiteUrl(normalizedSiteUrl);
+  const isSubdomain = rootSiteUrl !== normalizedSiteUrl;
+
+  if (!isSubdomain) {
+    // 루트 도메인만 AddSite 등록
+    try {
+      await callBing("AddSite", { siteUrl: normalizedSiteUrl }, normalizedSiteUrl);
+      added = true;
+    } catch (error) {
+      if (
+        error instanceof BingWebmasterError &&
+        error.errorCode === 2 &&
+        (error.apiMessage || "").includes("Max limit reached for number of sites registered under this domain")
+      ) {
+        notes.push("Bing site registration limit reached for this domain");
+        errors.push(`[CRITICAL] Bing 사이트 등록 한도 초과 — ${normalizedSiteUrl} 미등록. DNS-TXT 도메인 레벨 검증을 권장합니다.`);
+      } else {
+        errors.push(error instanceof Error ? error.message : String(error));
+      }
     }
   }
 
-  // static sitemap 제출
+  // sitemap 제출: 서브도메인이면 루트 도메인의 siteUrl로 제출
+  const submitSiteUrl = isSubdomain ? rootSiteUrl : normalizedSiteUrl;
+
   try {
     await callBing("SubmitFeed", {
-      siteUrl: normalizedSiteUrl,
+      siteUrl: submitSiteUrl,
       feedUrl,
-    });
+    }, submitSiteUrl);
     feedSubmitted = true;
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
   }
 
-  // Yoast/WordPress 기본 sitemap도 함께 제출 (항상 최신 상태)
+  // Yoast/WordPress 기본 sitemap도 함께 제출
   const wpSitemapUrl = `${normalizedSiteUrl}wp-sitemap.xml`;
   try {
     await callBing("SubmitFeed", {
-      siteUrl: normalizedSiteUrl,
+      siteUrl: submitSiteUrl,
       feedUrl: wpSitemapUrl,
-    });
+    }, submitSiteUrl);
   } catch {
     // wp-sitemap.xml 제출 실패는 치명적이지 않으므로 무시
   }

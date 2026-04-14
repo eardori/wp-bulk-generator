@@ -41,6 +41,19 @@ jobs:
             npm run build
           ENDSSH
 
+      - name: Sync env secrets
+        run: |
+          ssh deploy-server << ENDSSH
+            ENV_FILE="/home/ubuntu/wp-bulk-generator/bridge-api/.env"
+            touch "\$ENV_FILE"
+            # BING_WEBMASTER_API_KEY_MYGROUND
+            if grep -q '^BING_WEBMASTER_API_KEY_MYGROUND=' "\$ENV_FILE" 2>/dev/null; then
+              sed -i 's/^BING_WEBMASTER_API_KEY_MYGROUND=.*/BING_WEBMASTER_API_KEY_MYGROUND=${{ secrets.BING_WEBMASTER_API_KEY_MYGROUND }}/' "\$ENV_FILE"
+            else
+              echo 'BING_WEBMASTER_API_KEY_MYGROUND=${{ secrets.BING_WEBMASTER_API_KEY_MYGROUND }}' >> "\$ENV_FILE"
+            fi
+          ENDSSH
+
       - name: Restart services
         run: |
           ssh deploy-server << 'ENDSSH'
