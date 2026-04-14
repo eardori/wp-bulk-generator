@@ -10,7 +10,6 @@ import { updateDashboardSiteCache } from "../lib/dashboard-cache.js";
 import { buildBusinessSchemaFromHtml, stripReviewReferenceMarkers } from "../lib/business-schema.js";
 import {
   isBingWebmasterSyncEnabled,
-  submitBingUrls,
   syncBingSite,
 } from "../lib/bing-webmaster.js";
 import {
@@ -1354,27 +1353,22 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
             };
           });
           if (isBingWebmasterSyncEnabled()) {
-            // SubmitUrlBatch는 서브도메인 구조에서 NotAuthorized 발생 가능
-            // IndexNow가 주요 색인 경로이므로 SubmitUrlBatch 실패는 조용히 처리
+            // 서브도메인 sitemap을 루트 도메인 siteUrl로 Bing에 제출
             try {
+              const postOrigin = new URL(result.postUrl).origin;
               const postHost = new URL(result.postUrl).hostname;
               const domainParts = postHost.split(".");
               const rootDomain = domainParts.length > 2
                 ? domainParts.slice(-2).join(".")
                 : postHost;
               const bingSiteUrl = `https://${rootDomain}`;
+              // 루트 도메인 등록 + 서브도메인 sitemap 제출
               await syncBingSite(bingSiteUrl);
-              const bingResult = await submitBingUrls([result.postUrl], bingSiteUrl);
-              if (bingResult.submitted > 0) {
-                send({
-                  type: "progress",
-                  articleId: article.id,
-                  siteSlug: article.siteSlug,
-                  message: `Bing URL 제출 완료`,
-                });
+              if (postOrigin !== bingSiteUrl) {
+                await syncBingSite(postOrigin).catch(() => {});
               }
             } catch {
-              // IndexNow가 주요 색인 경로이므로 SubmitUrlBatch 실패는 무시
+              // IndexNow가 주요 색인 경로이므로 Bing API 실패는 무시
             }
           }
           // IndexNow — 즉시 색인 요청 (Bing, Yandex, Naver 등)
