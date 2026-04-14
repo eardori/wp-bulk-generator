@@ -641,6 +641,57 @@ export async function deployRoutes(app: FastifyInstance) {
     }
   });
 
+  // 기존 사이트의 robots.txt / llms.txt 재생성 (http→https 수정 등)
+  app.post("/deploy/refresh-static-files", async (req, reply) => {
+    const { send, close } = setupSSE(reply);
+    try {
+      const sites = readExistingSites() as StoredCredential[];
+      const WP_SITES_ROOT = process.env.WP_SITES_ROOT || "/var/www";
+      let updated = 0;
+
+      for (const site of sites) {
+        const slug = site.slug || site.site_slug;
+        const domain = site.domain;
+        if (!slug || !domain) continue;
+
+        const siteDir = join(WP_SITES_ROOT, slug);
+        if (!existsSync(siteDir)) continue;
+
+        const siteUrl = `https://${domain}`;
+
+        // robots.txt 재생성
+        const robotsTxt = [
+          "User-agent: *", "Allow: /", "",
+          "User-agent: Bingbot", "Allow: /", "",
+          "User-agent: msnbot", "Allow: /", "",
+          "User-agent: GPTBot", "Allow: /", "",
+          "User-agent: ChatGPT-User", "Allow: /", "",
+          "User-agent: Google-Extended", "Allow: /", "",
+          "User-agent: Anthropic-ai", "Allow: /", "",
+          "User-agent: ClaudeBot", "Allow: /", "",
+          "User-agent: PerplexityBot", "Allow: /", "",
+          "User-agent: Applebot-Extended", "Allow: /", "",
+          "User-agent: OAI-SearchBot", "Allow: /", "",
+          "User-agent: Amazonbot", "Allow: /", "",
+          "User-agent: FacebookBot", "Allow: /", "",
+          "User-agent: cohere-ai", "Allow: /", "",
+          `Sitemap: ${siteUrl}/sitemap_index.xml`,
+          `Sitemap: ${siteUrl}/wp-sitemap.xml`,
+        ].join("\n") + "\n";
+
+        writeFileSync(join(siteDir, "robots.txt"), robotsTxt, "utf-8");
+        updated++;
+        send({ type: "log", message: `✓ ${domain} robots.txt 갱신` });
+      }
+
+      send({ type: "done", message: `완료: ${updated}개 사이트 static files 갱신` });
+    } catch (error) {
+      send({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      close();
+    }
+  });
+
   // 모든 myground 사이트의 sitemap을 Bing에 일괄 제출
   app.post("/deploy/submit-sitemaps", async (req, reply) => {
     const { send, close } = setupSSE(reply);
