@@ -88,7 +88,7 @@ jobs:
         run: |
           ssh deploy-server << 'ENDSSH'
             # Primary 서버
-            COUNT=$(find /var/www -maxdepth 2 -name robots.txt -exec grep -l 'http://' {} \; 2>/dev/null | while read f; do sed -i 's|http://|https://|g' "$f" && echo "$f"; done | wc -l)
+            COUNT=$(sudo find /var/www -maxdepth 2 -name robots.txt -exec grep -l 'http://' {} \; 2>/dev/null | while read f; do sudo sed -i 's|http://|https://|g' "$f" && echo "$f"; done | wc -l)
             echo "Primary robots.txt 갱신: ${COUNT}개"
 
             # Secondary 서버 (SSH key가 있으면)
@@ -98,7 +98,7 @@ jobs:
               SEC_KEY="${SECONDARY_SERVER_KEY_PATH:-}"
               if [ -n "$SEC_KEY" ] && [ -f "$SEC_KEY" ]; then
                 SEC_COUNT=$(ssh -i "$SEC_KEY" -o StrictHostKeyChecking=no "$SEC_USER@$SECONDARY_SERVER_HOST" \
-                  "find /var/www -maxdepth 2 -name robots.txt -exec grep -l 'http://' {} \; 2>/dev/null | while read f; do sed -i 's|http://|https://|g' \"\$f\" && echo \"\$f\"; done | wc -l" 2>/dev/null || echo "0")
+                  "sudo find /var/www -maxdepth 2 -name robots.txt -exec grep -l 'http://' {} \; 2>/dev/null | while read f; do sudo sed -i 's|http://|https://|g' \"\$f\" && echo \"\$f\"; done | wc -l" 2>/dev/null || echo "0")
                 echo "Secondary robots.txt 갱신: ${SEC_COUNT}개"
               fi
             fi
