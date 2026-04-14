@@ -84,13 +84,29 @@ jobs:
             curl -sf http://localhost:4000/health && echo ' OK' || echo ' FAIL'
           ENDSSH
 
-      - name: Refresh static files (robots.txt)
+      - name: Refresh robots.txt (http→https)
         run: |
           ssh deploy-server << 'ENDSSH'
-            API_KEY=$(grep '^BRIDGE_API_KEY=' /home/ubuntu/wp-bulk-generator/bridge-api/.env 2>/dev/null | cut -d= -f2-)
-            RESULT=$(curl -sf -X POST http://localhost:4000/deploy/refresh-static-files \
-              -H "Content-Type: application/json" \
-              -H "X-Bridge-API-Key: $API_KEY" \
-              -d '{}' 2>&1 | tail -1)
-            echo "Static files refresh: $RESULT"
+            CREDS="/root/wp-sites-credentials.json"
+            [ -f "$CREDS" ] || { echo "No credentials file"; exit 0; }
+            COUNT=0
+            for SLUG_DOMAIN in $(python3 -c "
+            import json
+            sites = json.load(open('$CREDS'))
+            for s in sites:
+              slug = s.get('slug') or s.get('site_slug','')
+              domain = s.get('domain','')
+              if slug and domain: print(f'{slug}|{domain}')
+            " 2>/dev/null); do
+              SLUG="${SLUG_DOMAIN%%|*}"
+              DOMAIN="${SLUG_DOMAIN##*|}"
+              ROBOTS="/var/www/$SLUG/robots.txt"
+              [ -f "$ROBOTS" ] || continue
+              if grep -q 'http://' "$ROBOTS" 2>/dev/null; then
+                sed -i "s|http://$DOMAIN|https://$DOMAIN|g" "$ROBOTS"
+                echo "  ✓ $DOMAIN"
+                COUNT=$((COUNT+1))
+              fi
+            done
+            echo "robots.txt 갱신: ${COUNT}개"
           ENDSSH
