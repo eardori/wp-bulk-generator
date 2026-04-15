@@ -1355,17 +1355,17 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
           if (isBingWebmasterSyncEnabled()) {
             // 서브도메인 sitemap을 루트 도메인 siteUrl로 Bing에 제출
             try {
-              const postOrigin = new URL(result.postUrl).origin;
               const postHost = new URL(result.postUrl).hostname;
               const domainParts = postHost.split(".");
               const rootDomain = domainParts.length > 2
                 ? domainParts.slice(-2).join(".")
                 : postHost;
               const bingSiteUrl = `https://${rootDomain}`;
+              const postSiteUrl = `https://${postHost}`;
               // 루트 도메인 등록 + 서브도메인 sitemap 제출
               await syncBingSite(bingSiteUrl);
-              if (postOrigin !== bingSiteUrl) {
-                await syncBingSite(postOrigin).catch(() => {});
+              if (postSiteUrl !== bingSiteUrl) {
+                await syncBingSite(postSiteUrl).catch(() => {});
               }
             } catch {
               // IndexNow가 주요 색인 경로이므로 Bing API 실패는 무시
