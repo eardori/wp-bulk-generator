@@ -39,7 +39,7 @@ jobs:
 
       - name: Install dependencies (if changed)
         run: |
-          ssh deploy-server 'cd /home/ubuntu/wp-bulk-generator/admin && md5sum package-lock.json > /tmp/lockfile-new.md5 && if ! diff -q /tmp/lockfile-new.md5 /tmp/lockfile-prev.md5 >/dev/null 2>&1; then npm ci && cp /tmp/lockfile-new.md5 /tmp/lockfile-prev.md5; else echo "package-lock.json unchanged, skipping npm ci"; fi'
+          ssh deploy-server 'cd /home/ubuntu/wp-bulk-generator/admin && md5sum package-lock.json > /tmp/lockfile-new.md5 && if ! diff -q /tmp/lockfile-new.md5 /tmp/lockfile-prev.md5 >/dev/null 2>&1; then rm -rf node_modules && npm ci && cp /tmp/lockfile-new.md5 /tmp/lockfile-prev.md5; else echo "package-lock.json unchanged, skipping npm ci"; fi'
 
       - name: Build & restart Admin
         run: |
