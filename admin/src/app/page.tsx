@@ -138,7 +138,11 @@ export default function Home() {
         setConfigs(saved.configs);
       }
       if (saved.deployStatus) {
-        setDeployStatus(saved.deployStatus);
+        // SSE 재연결 불가 — deploying 상태면 idle로 리셋
+        const restored = saved.deployStatus.status === "deploying"
+          ? createInitialDeployStatus()
+          : saved.deployStatus;
+        setDeployStatus(restored);
       }
       if (saved.generation) {
         setGeneration(saved.generation as GenerationState);
