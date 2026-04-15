@@ -13,6 +13,7 @@ jobs:
   deploy:
     name: Deploy Admin to Lightsail
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -28,29 +29,19 @@ jobs:
             User ${{ secrets.SSH_USER }}
             IdentityFile ~/.ssh/deploy_key
             StrictHostKeyChecking no
+            ServerAliveInterval 30
+            ServerAliveCountMax 20
           EOF
 
-      - name: Pull latest code
+      - name: Pull & install
         run: |
-          ssh deploy-server << 'ENDSSH'
-            cd /home/ubuntu/wp-bulk-generator
-            git fetch origin main
-            git reset --hard origin/main
-            cd admin
-            npm ci
-          ENDSSH
+          ssh deploy-server 'cd /home/ubuntu/wp-bulk-generator && git fetch origin main && git reset --hard origin/main && cd admin && npm ci'
 
       - name: Build & restart Admin
         run: |
-          ssh deploy-server << 'ENDSSH'
-            cd /home/ubuntu/wp-bulk-generator
-            bash scripts/rebuild-admin.sh
-          ENDSSH
+          ssh deploy-server 'cd /home/ubuntu/wp-bulk-generator && bash scripts/rebuild-admin.sh'
 
       - name: Health check
         run: |
           sleep 5
-          ssh deploy-server << 'ENDSSH'
-            echo "--- Admin Dashboard ---"
-            curl -sf http://localhost:3000 -o /dev/null && echo 'OK' || echo 'FAIL'
-          ENDSSH
+          ssh deploy-server 'curl -sf http://localhost:3000 -o /dev/null && echo "Admin OK" || echo "Admin FAIL"'
