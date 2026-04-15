@@ -84,22 +84,41 @@ jobs:
             curl -sf http://localhost:4000/health && echo ' OK' || echo ' FAIL'
           ENDSSH
 
-      - name: Refresh robots.txt (http→https)
+      - name: Fix http→https (robots.txt + WordPress siteurl)
         run: |
           ssh deploy-server << 'ENDSSH'
-            # Primary 서버
+            # Primary 서버 robots.txt
             COUNT=$(sudo find /var/www -maxdepth 2 -name robots.txt -exec grep -l 'http://' {} \; 2>/dev/null | while read f; do sudo sed -i 's|http://|https://|g' "$f" && echo "$f"; done | wc -l)
             echo "Primary robots.txt 갱신: ${COUNT}개"
 
-            # Secondary 서버 (SSH key가 있으면)
+            # Secondary 서버
             source /home/ubuntu/wp-bulk-generator/bridge-api/.env 2>/dev/null || true
             if [ -n "${SECONDARY_SERVER_HOST:-}" ]; then
               SEC_USER="${SECONDARY_SERVER_USER:-junguyehong}"
               SEC_KEY="${SECONDARY_SERVER_KEY_PATH:-}"
               if [ -n "$SEC_KEY" ] && [ -f "$SEC_KEY" ]; then
+                # robots.txt 수정
                 SEC_COUNT=$(ssh -i "$SEC_KEY" -o StrictHostKeyChecking=no "$SEC_USER@$SECONDARY_SERVER_HOST" \
                   "sudo find /var/www -maxdepth 2 -name robots.txt -exec grep -l 'http://' {} \; 2>/dev/null | while read f; do sudo sed -i 's|http://|https://|g' \"\$f\" && echo \"\$f\"; done | wc -l" 2>/dev/null || echo "0")
                 echo "Secondary robots.txt 갱신: ${SEC_COUNT}개"
+
+                # WordPress siteurl/home http→https 일괄 수정
+                WP_COUNT=$(ssh -i "$SEC_KEY" -o StrictHostKeyChecking=no "$SEC_USER@$SECONDARY_SERVER_HOST" '
+                  COUNT=0
+                  for d in /var/www/*/wp-config.php; do
+                    SITE_DIR="$(dirname "$d")"
+                    HOME_URL=$(sudo wp option get home --path="$SITE_DIR" --allow-root 2>/dev/null || true)
+                    if echo "$HOME_URL" | grep -q "^http://"; then
+                      NEW_URL=$(echo "$HOME_URL" | sed "s|^http://|https://|")
+                      sudo wp option update home "$NEW_URL" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null
+                      sudo wp option update siteurl "$NEW_URL" --path="$SITE_DIR" --allow-root --quiet 2>/dev/null
+                      echo "  ✓ $NEW_URL"
+                      COUNT=$((COUNT+1))
+                    fi
+                  done
+                  echo "$COUNT"
+                ' 2>/dev/null | tail -1 || echo "0")
+                echo "Secondary WordPress https 갱신: ${WP_COUNT}개"
               fi
             fi
           ENDSSH
