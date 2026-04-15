@@ -73,7 +73,13 @@ export default function ContentPage() {
           : saved.step;
         setStep(restoredStep as ContentStep);
       } else if (saved.step && saved.step !== "input") {
-        setStep(saved.step as ContentStep);
+        // SSE 재연결 불가한 중간 단계는 input으로 리셋
+        const nonRestorable: ContentStep[] = ["scraping", "fetching-reviews", "generating", "publishing", "selecting", "content-config"];
+        if (nonRestorable.includes(saved.step as ContentStep)) {
+          setStep("input");
+        } else {
+          setStep(saved.step as ContentStep);
+        }
       }
       if (saved.log?.length > 0) setLog(saved.log);
       if (saved.genProgress) setGenProgress(saved.genProgress);
