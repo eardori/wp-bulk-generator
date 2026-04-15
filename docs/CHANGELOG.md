@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-04-15: WordPress siteurl https 일괄 수정 + UI 개선
+
+- **WordPress siteurl/home https 수정**: Secondary 서버 28개 사이트의 `home`/`siteurl`을 `http://` → `https://`로 일괄 수정 (WP-CLI)
+- **publish-articles.ts https 강제**: Bing URL 제출 시 WordPress 내부 `http://` siteurl 대신 항상 `https://`로 제출하도록 수정
+- **배포 워크플로우 자동 보정**: `deploy-bridge.yml`에 robots.txt + WordPress siteurl http→https 자동 수정 스텝 추가 (매 배포 시 실행)
+- **콘텐츠 생성 사이트 선택 UI**: 사이트 제목 아래에 사이트 URL 표시 추가 (`ContentConfigPanel.tsx`)
+
+## 2026-04-14: myground.website 도메인 AEO + Bing 통합
+
+- **Bing 듀얼 API 키**: `BING_WEBMASTER_API_KEY_MYGROUND` 환경변수 추가, 도메인 기반 자동 키 선택 (`bing-webmaster.ts`)
+- **서브도메인 루트 통합**: 서브도메인을 개별 AddSite 안 하고, 루트 도메인 `myground.website`에 sitemap 제출하도록 `syncBingSite()` 변경
+- **robots.txt https 수정**: 배포 시 Primary + Secondary 서버의 robots.txt `http://` → `https://` 자동 갱신 (`deploy-bridge.yml`)
+- **refresh-static-files 엔드포인트**: Primary + Secondary 서버 robots.txt 일괄 갱신 API 추가 (`deploy.ts`)
+- **submit-sitemaps 엔드포인트**: myground 사이트 Bing sitemap 일괄 제출 API 추가 (`deploy.ts`)
+- **proxy-sync 엔드포인트**: SSL 인증서 + Nginx 설정 단독 갱신 API 추가 (`deploy.ts`)
+- **GitHub Secret**: `BING_WEBMASTER_API_KEY_MYGROUND` 추가, deploy workflow에서 서버 `.env` 자동 동기화
+- **myground SSL 인증서**: `sync-secondary-proxies.sh`에 myground 전용 공유 SAN 인증서 지원 추가
+
 ## 2026-03-14: GEO Phase 2 기존 글 일괄 적용 완료
 
 - **seo-optimize 실행**: 전체 사이트 82개 글에 GEO Phase 2 일괄 적용 (Product/Review 스키마 + 내부 링크 + llms-full.txt)

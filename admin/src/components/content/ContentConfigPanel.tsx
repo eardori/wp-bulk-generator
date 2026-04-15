@@ -240,23 +240,30 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
                   className="w-3.5 h-3.5 accent-emerald-500 cursor-pointer flex-shrink-0"
                 />
 
-                <div className="flex-1 min-w-0 flex items-center gap-2">
-                  <span className="text-sm font-medium text-white truncate">
-                    {site.title || site.slug}
-                  </span>
-                  {site.persona?.name && (
-                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-blue-500/15 text-blue-400 flex-shrink-0">
-                      {site.persona.name}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-white truncate">
+                      {site.title || site.slug}
                     </span>
-                  )}
-                  {site.persona?.tone && (
-                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-500/15 text-amber-400 flex-shrink-0 hidden sm:inline">
-                      {site.persona.tone}
+                    {site.persona?.name && (
+                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-blue-500/15 text-blue-400 flex-shrink-0">
+                        {site.persona.name}
+                      </span>
+                    )}
+                    {site.persona?.tone && (
+                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-500/15 text-amber-400 flex-shrink-0 hidden sm:inline">
+                        {site.persona.tone}
+                      </span>
+                    )}
+                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/70 text-gray-300 flex-shrink-0">
+                      {getServerGroupLabel(getServerGroupId(site))}
                     </span>
+                  </div>
+                  {site.url && (
+                    <div className="text-[11px] text-gray-500 truncate mt-0.5">
+                      {site.url}
+                    </div>
                   )}
-                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/70 text-gray-300 flex-shrink-0">
-                    {getServerGroupLabel(getServerGroupId(site))}
-                  </span>
                 </div>
 
                 {config.enabled && (
