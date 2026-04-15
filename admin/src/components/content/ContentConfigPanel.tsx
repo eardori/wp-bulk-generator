@@ -28,21 +28,21 @@ function summarizePrompt(prompt: string): string {
   return normalized.length > 140 ? `${normalized.slice(0, 140)}...` : normalized;
 }
 
-function getServerGroupId(site: SiteCredential): string {
-  const serverId = site.server_id?.trim();
-  if (serverId) return serverId;
-  return "primary";
+function getDomainGroup(site: SiteCredential): string {
+  const url = site.url || site.domain || "";
+  const host = url.replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase();
+  if (host.endsWith(".myground.website") || host === "myground.website") return "myground.website";
+  if (host.endsWith(".allmyreview.site") || host === "allmyreview.site") return "allmyreview.site";
+  return "기타";
 }
 
-function getServerGroupLabel(serverId: string): string {
-  if (serverId === "primary") return "기존 서버";
-  if (serverId === "secondary") return "새 서버";
-  return serverId;
+function getDomainGroupLabel(group: string): string {
+  return group;
 }
 
 export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, onSubmitAsJob, onBack }: Props) {
   const [configs, setConfigs] = useState<ContentArticleConfig[]>([]);
-  const [activeServerTab, setActiveServerTab] = useState("all");
+  const [activeDomainTab, setActiveDomainTab] = useState("all");
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -58,29 +58,29 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
     return () => clearTimeout(t);
   }, [sites]);
 
-  const serverTabs = useMemo(() => {
-    const tabs = [
-      { id: "all", label: "전체 사이트", count: sites.length },
-      ...Array.from(new Set(sites.map((site) => getServerGroupId(site)))).map((serverId) => ({
-        id: serverId,
-        label: getServerGroupLabel(serverId),
-        count: sites.filter((site) => getServerGroupId(site) === serverId).length,
+  const domainTabs = useMemo(() => {
+    const groups = Array.from(new Set(sites.map((site) => getDomainGroup(site))));
+    return [
+      { id: "all", label: "전체", count: sites.length },
+      ...groups.map((group) => ({
+        id: group,
+        label: getDomainGroupLabel(group),
+        count: sites.filter((site) => getDomainGroup(site) === group).length,
       })),
     ];
-    return tabs;
   }, [sites]);
 
   useEffect(() => {
     const t = setTimeout(() => {
-      if (!serverTabs.some((tab) => tab.id === activeServerTab)) {
-        setActiveServerTab("all");
+      if (!domainTabs.some((tab) => tab.id === activeDomainTab)) {
+        setActiveDomainTab("all");
       }
     }, 0);
     return () => clearTimeout(t);
-  }, [activeServerTab, serverTabs]);
+  }, [activeDomainTab, domainTabs]);
 
   const filteredSites = sites.filter((site) =>
-    activeServerTab === "all" ? true : getServerGroupId(site) === activeServerTab
+    activeDomainTab === "all" ? true : getDomainGroup(site) === activeDomainTab
   );
   const filteredSiteSlugs = new Set(filteredSites.map((site) => site.slug));
 
@@ -111,7 +111,7 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
   const selectVisibleOnly = () =>
     setConfigs((prev) =>
       prev.map((config) =>
-        activeServerTab === "all"
+        activeDomainTab === "all"
           ? { ...config, enabled: true }
           : { ...config, enabled: filteredSiteSlugs.has(config.siteSlug) }
       )
@@ -160,12 +160,12 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {serverTabs.map((tab) => {
-          const isActive = activeServerTab === tab.id;
+        {domainTabs.map((tab) => {
+          const isActive = activeDomainTab === tab.id;
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveServerTab(tab.id)}
+              onClick={() => setActiveDomainTab(tab.id)}
               className={`px-3 py-2 rounded-xl text-sm border transition-all ${
                 isActive
                   ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
@@ -182,7 +182,7 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
       {/* ── 일괄 설정 바 ── */}
       <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-gray-800 border border-gray-700">
         <span className="text-xs text-gray-400 whitespace-nowrap">
-          {activeServerTab === "all" ? "전체 일괄:" : `${getServerGroupLabel(activeServerTab)} 일괄:`}
+          {activeDomainTab === "all" ? "전체 일괄:" : `${getDomainGroupLabel(activeDomainTab)} 일괄:`}
         </span>
         <div className="flex items-center gap-1.5">
           {COUNT_OPTIONS.map((n) => (
@@ -206,7 +206,7 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
           onClick={selectVisibleOnly}
           className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors whitespace-nowrap"
         >
-          {activeServerTab === "all" ? "전체 선택" : `${getServerGroupLabel(activeServerTab)}만 선택`}
+          {activeDomainTab === "all" ? "전체 선택" : `${getDomainGroupLabel(activeDomainTab)}만 선택`}
         </button>
         <span className="text-xs text-gray-500 whitespace-nowrap">
           전체 {enabledCount}/{sites.length}개
@@ -216,12 +216,38 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
         </span>
       </div>
 
-      {/* ── 사이트 목록 (컴팩트 테이블) ── */}
+      {/* ── 사이트 목록 (도메인 그룹별) ── */}
       {filteredSites.length === 0 ? (
         <div className="text-center py-8 text-gray-500">배포된 사이트가 없습니다.</div>
       ) : (
         <div className="space-y-1 max-h-[420px] overflow-y-auto pr-1">
-          {filteredSites.map((site) => {
+          {(() => {
+            // 도메인 그룹별로 정렬하여 표시
+            const grouped = new Map<string, SiteCredential[]>();
+            for (const site of filteredSites) {
+              const group = getDomainGroup(site);
+              if (!grouped.has(group)) grouped.set(group, []);
+              grouped.get(group)!.push(site);
+            }
+            const entries = Array.from(grouped.entries());
+            const showHeaders = activeDomainTab === "all" && entries.length > 1;
+            return entries.map(([group, groupSites]) => (
+              <div key={group}>
+                {showHeaders && (
+                  <div className={`flex items-center gap-2 px-3 py-1.5 mt-2 first:mt-0 ${
+                    group === "myground.website"
+                      ? "border-l-2 border-purple-500/50"
+                      : "border-l-2 border-cyan-500/50"
+                  }`}>
+                    <span className={`text-xs font-semibold ${
+                      group === "myground.website" ? "text-purple-400" : "text-cyan-400"
+                    }`}>
+                      {group}
+                    </span>
+                    <span className="text-[10px] text-gray-500">{groupSites.length}개</span>
+                  </div>
+                )}
+                {groupSites.map((site) => {
             const config = configs.find((c) => c.siteSlug === site.slug);
             if (!config) return null;
             return (
@@ -255,8 +281,12 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
                         {site.persona.tone}
                       </span>
                     )}
-                    <span className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700/70 text-gray-300 flex-shrink-0">
-                      {getServerGroupLabel(getServerGroupId(site))}
+                    <span className={`px-1.5 py-0.5 text-[10px] rounded flex-shrink-0 ${
+                      getDomainGroup(site) === "myground.website"
+                        ? "bg-purple-500/15 text-purple-400"
+                        : "bg-cyan-500/15 text-cyan-400"
+                    }`}>
+                      {getDomainGroup(site)}
                     </span>
                   </div>
                   {site.url && (
@@ -285,7 +315,10 @@ export default function ContentConfigPanel({ sites, contentPrompt, onGenerate, o
                 )}
               </div>
             );
-          })}
+                })}
+              </div>
+            ));
+          })()}
         </div>
       )}
 
