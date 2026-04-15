@@ -13,7 +13,7 @@ jobs:
   deploy:
     name: Deploy Admin to Lightsail
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -30,12 +30,16 @@ jobs:
             IdentityFile ~/.ssh/deploy_key
             StrictHostKeyChecking no
             ServerAliveInterval 30
-            ServerAliveCountMax 20
+            ServerAliveCountMax 40
           EOF
 
-      - name: Pull & install
+      - name: Pull latest code
         run: |
-          ssh deploy-server 'cd /home/ubuntu/wp-bulk-generator && git fetch origin main && git reset --hard origin/main && cd admin && npm ci'
+          ssh deploy-server 'cd /home/ubuntu/wp-bulk-generator && git fetch origin main && git reset --hard origin/main'
+
+      - name: Install dependencies (if changed)
+        run: |
+          ssh deploy-server 'cd /home/ubuntu/wp-bulk-generator/admin && md5sum package-lock.json > /tmp/lockfile-new.md5 && if ! diff -q /tmp/lockfile-new.md5 /tmp/lockfile-prev.md5 >/dev/null 2>&1; then npm ci && cp /tmp/lockfile-new.md5 /tmp/lockfile-prev.md5; else echo "package-lock.json unchanged, skipping npm ci"; fi'
 
       - name: Build & restart Admin
         run: |
