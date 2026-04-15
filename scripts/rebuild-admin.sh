@@ -69,7 +69,16 @@ cd "${APP_DIR}"
 NEXT_TELEMETRY_DISABLED=1 NODE_OPTIONS="--max-old-space-size=${NODE_HEAP_MB}" NEXT_DIST_DIR="${BUILD_DIR}" \
   ./node_modules/.bin/next build --webpack
 
-test -f "${BUILD_DIR}/BUILD_ID"
+# Next.js 16은 BUILD_ID를 서브디렉토리에 생성할 수 있음
+if [ ! -f "${BUILD_DIR}/BUILD_ID" ]; then
+  echo "⚠ BUILD_ID not at root, checking subdirectories..."
+  BUILD_ID_PATH=$(find "${BUILD_DIR}" -maxdepth 2 -name BUILD_ID -print -quit 2>/dev/null || true)
+  if [ -z "${BUILD_ID_PATH}" ]; then
+    echo "✗ BUILD_ID not found — build may have failed"
+    exit 1
+  fi
+  echo "✓ Found BUILD_ID at ${BUILD_ID_PATH}"
+fi
 
 if [ -L "${LIVE_NEXT}" ]; then
   ln -sfn "${BUILD_DIR}" "${LIVE_NEXT}"
