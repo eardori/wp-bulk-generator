@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-04-18: Bridge 서버 Gemini 모델 env 강제 전환
+
+- **원인**: 2026-04-17에 코드 기본값을 `gemini-2.5-flash` → `gemini-2.0-flash`로 바꿨지만, Bridge 서버 `.env`에 남아있던 `GEMINI_CONFIG_MODEL=gemini-2.5-flash`가 여전히 오버라이드 — 재배포 후에도 사이트 생성이 503(high demand)로 실패
+- **조치**: `deploy-bridge.yml`의 `Sync env secrets` 스텝에 `GEMINI_CONFIG_MODEL` / `GEMINI_CONFIG_FALLBACK_MODEL`을 `gemini-2.0-flash`로 강제 갱신하는 sed 블록 추가. 이후 매 배포마다 자동으로 안정 GA 모델을 유지
+
 ## 2026-04-17: 도메인별 사이트 그룹화 UI
 
 - **공용 도메인 유틸 추출**: `getDomainGroup` / `getDomainGroupLabel` / `getDomainGroupColor`를 `admin/src/lib/domainGroup.ts`로 공용화 (기존 `ContentConfigPanel` 내부 로컬 정의 → 공용 모듈)
@@ -217,3 +222,4 @@
 | 2026-04-17 | Hoon | Claude Code | 콘텐츠 제작 상태 복원 버그 수정 + 사이트 생성 batch_error 메시지 표면화 |
 | 2026-04-17 | Hoon | Claude Code | 도메인별 사이트 그룹화 UI: 대시보드 도메인 탭 + 콘텐츠 생성 섹션 접기/펼치기·도메인별 일괄 조작 |
 | 2026-04-17 | Hoon | Claude Code | deploy-bridge 워크플로우 SSH keepalive + 빌드 메모리 제한 추가 (Lightsail idle timeout 방지) |
+| 2026-04-18 | Hoon | Claude Code | deploy-bridge에 GEMINI_CONFIG_MODEL=gemini-2.0-flash 강제 갱신 추가 — 서버 .env의 2.5-flash 잔존값이 503 유발 |

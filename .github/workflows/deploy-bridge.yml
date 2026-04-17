@@ -60,6 +60,17 @@ jobs:
             else
               echo 'BING_WEBMASTER_API_KEY_MYGROUND=${{ secrets.BING_WEBMASTER_API_KEY_MYGROUND }}' >> "\$ENV_FILE"
             fi
+            # GEMINI_CONFIG_MODEL: 2.5-flash는 preview라 503 과부하가 잦음 → 안정 GA인 2.0-flash로 고정
+            if grep -q '^GEMINI_CONFIG_MODEL=' "\$ENV_FILE" 2>/dev/null; then
+              sed -i 's|^GEMINI_CONFIG_MODEL=.*|GEMINI_CONFIG_MODEL=gemini-2.0-flash|' "\$ENV_FILE"
+            else
+              echo 'GEMINI_CONFIG_MODEL=gemini-2.0-flash' >> "\$ENV_FILE"
+            fi
+            if grep -q '^GEMINI_CONFIG_FALLBACK_MODEL=' "\$ENV_FILE" 2>/dev/null; then
+              sed -i 's|^GEMINI_CONFIG_FALLBACK_MODEL=.*|GEMINI_CONFIG_FALLBACK_MODEL=gemini-2.0-flash|' "\$ENV_FILE"
+            else
+              echo 'GEMINI_CONFIG_FALLBACK_MODEL=gemini-2.0-flash' >> "\$ENV_FILE"
+            fi
           ENDSSH
 
       - name: Restart services
