@@ -28,16 +28,24 @@ jobs:
             User ${{ secrets.SSH_USER }}
             IdentityFile ~/.ssh/deploy_key
             StrictHostKeyChecking no
+            ServerAliveInterval 30
+            ServerAliveCountMax 40
+            TCPKeepAlive yes
           EOF
 
       - name: Pull & build
+        timeout-minutes: 20
         run: |
-          ssh deploy-server << 'ENDSSH'
+          # Lightsail 메모리 부족(Swap 57%) 상황에서 빌드 중 SSH idle timeout 방지용 keepalive 적용
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=40 deploy-server << 'ENDSSH'
+            set -e
             cd /home/ubuntu/wp-bulk-generator
             git fetch origin main
             git reset --hard origin/main
             cd bridge-api
-            npm ci
+            # 빌드 메모리 여유 확보 — Node 기본 heap이 부족하면 swap으로 늘어지며 SSH 끊김 유발
+            export NODE_OPTIONS="--max-old-space-size=1024"
+            npm ci --no-audit --no-fund
             npm run build
           ENDSSH
 

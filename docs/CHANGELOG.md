@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-17: 도메인별 사이트 그룹화 UI
+
+- **공용 도메인 유틸 추출**: `getDomainGroup` / `getDomainGroupLabel` / `getDomainGroupColor`를 `admin/src/lib/domainGroup.ts`로 공용화 (기존 `ContentConfigPanel` 내부 로컬 정의 → 공용 모듈)
+- **대시보드 도메인 탭 필터**: `dashboard/page.tsx`의 "사이트별 글 목록"에 도메인 탭(전체 / myground.website / allmyreview.site / 기타) 추가. 서버 탭·그룹 필터·텍스트 검색과 AND 결합
+- **콘텐츠 생성 화면 섹션 조작**: `ContentConfigPanel.tsx` 전체 탭에서 각 도메인 섹션 헤더에 접기/펼치기, "전체 선택/해제", 일괄 글 수 버튼(1/2/3/5개) 추가 — myground과 allmyreview를 다른 글 수로 동시 설정 가능
+- **상태 관리**: `collapsedGroups: Set<string>`, `domainFilter: "all" | DomainGroup` state 추가 (useState 유지, Zustand 미도입)
+
 ## 2026-04-17: 콘텐츠 제작 상태 복원 + 사이트 생성 AI 배치 에러 표면화
 
 - **콘텐츠 제작 오배너 수정**: 이전 세션에서 스크랩 실패 후 `manual`/`scraping` 등 중간 단계로 저장된 sessionStorage가 새 진입 시 그대로 복원돼 URL 없이도 "자동 스크랩 실패(Invalid URL)" 배너가 뜨던 문제 해결 (`admin/src/app/content/page.tsx`)
@@ -8,6 +15,7 @@
   - `handleScrape` 시작부에 빈/공백 URL 가드 추가 (방어적 입력 정규화)
 - **사이트 생성 배치 에러 원인 노출**: `batch_error` SSE 이벤트의 `message` 필드를 UI `partialWarning`에 함께 표시 (`admin/src/app/page.tsx`). 기존에는 "배치 1/1에서 중단됨"만 보이고 Gemini 호출 실패 원인(모델명·한도 등)이 숨겨져 원인 파악이 어려웠음
 - **Gemini 모델 503 대응**: 사이트 생성이 `gemini-2.5-flash` 503(Service Unavailable: high demand)으로 실패 — 기본 모델을 안정 GA인 `gemini-2.0-flash`로 전환하고 `callGeminiWithRetry`에 503/500 재시도 로직 추가 (`bridge-api/src/routes/generate-configs.ts`)
+- **Bridge 배포 SSH keepalive 추가**: Lightsail 빌드 중 SSH idle timeout(`Broken pipe`)으로 `deploy-bridge` 워크플로우가 실패하던 문제 해결 — `~/.ssh/config`에 `ServerAliveInterval 30` / `ServerAliveCountMax 40` / `TCPKeepAlive yes` 추가, Pull & build 스텝에 `timeout-minutes: 20` + `NODE_OPTIONS=--max-old-space-size=1024` + `npm ci --no-audit --no-fund` 적용 (`.github/workflows/deploy-bridge.yml`)
 
 ## 2026-04-15: WordPress siteurl https 일괄 수정 + UI 개선
 
@@ -207,3 +215,5 @@
 | 2026-03-14 | Kevin | Claude Code | 레포 public 전환 + Admin Basic Auth 기록 추가 |
 | 2026-03-14 | Kevin | Claude Code | GEO Phase 2: Product 스키마 + 내부 링크 + llms-full.txt |
 | 2026-04-17 | Hoon | Claude Code | 콘텐츠 제작 상태 복원 버그 수정 + 사이트 생성 batch_error 메시지 표면화 |
+| 2026-04-17 | Hoon | Claude Code | 도메인별 사이트 그룹화 UI: 대시보드 도메인 탭 + 콘텐츠 생성 섹션 접기/펼치기·도메인별 일괄 조작 |
+| 2026-04-17 | Hoon | Claude Code | deploy-bridge 워크플로우 SSH keepalive + 빌드 메모리 제한 추가 (Lightsail idle timeout 방지) |
