@@ -280,6 +280,9 @@ export default function Home() {
           const collected = Number(event.collected) || generatedCount;
           const totalBatches = Number(event.totalBatches) || generation.totalBatches;
           const batchIndex = Number(event.batchIndex) + 1;
+          const reason = typeof event.message === "string" && event.message.trim()
+            ? event.message
+            : "알 수 없는 오류";
 
           generatedCount = collected;
           setGeneration((prev) => ({
@@ -288,7 +291,7 @@ export default function Home() {
             doneBatches: batchIndex,
             totalBatches: totalBatches || prev.totalBatches,
             progressMsg: "",
-            partialWarning: `⚠️ 배치 ${batchIndex}/${totalBatches || "?"}에서 중단됨 - ${collected}개까지 확보했습니다.`,
+            partialWarning: `⚠️ 배치 ${batchIndex}/${totalBatches || "?"}에서 중단됨 - ${collected}개까지 확보했습니다. 원인: ${reason}`,
             streamComplete: true,
           }));
           return;

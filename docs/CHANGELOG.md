@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-04-17: 콘텐츠 제작 상태 복원 + 사이트 생성 AI 배치 에러 표면화
+
+- **콘텐츠 제작 오배너 수정**: 이전 세션에서 스크랩 실패 후 `manual`/`scraping` 등 중간 단계로 저장된 sessionStorage가 새 진입 시 그대로 복원돼 URL 없이도 "자동 스크랩 실패(Invalid URL)" 배너가 뜨던 문제 해결 (`admin/src/app/content/page.tsx`)
+  - `manual`을 non-restorable 스텝에 추가하고 첫 분기(articles 있음)에도 필터 적용
+  - 복원 불가 단계면 이전 `log`/`product` 복원을 스킵해 에러 잔상 제거
+  - `handleScrape` 시작부에 빈/공백 URL 가드 추가 (방어적 입력 정규화)
+- **사이트 생성 배치 에러 원인 노출**: `batch_error` SSE 이벤트의 `message` 필드를 UI `partialWarning`에 함께 표시 (`admin/src/app/page.tsx`). 기존에는 "배치 1/1에서 중단됨"만 보이고 Gemini 호출 실패 원인(모델명·한도 등)이 숨겨져 원인 파악이 어려웠음
+- **후속**: Bridge 서버 `GEMINI_CONFIG_MODEL` 및 API 키 상태 확인 필요 — 실제 에러 문구 확인 후 모델 조정 또는 쿼터 해소
+
 ## 2026-04-15: WordPress siteurl https 일괄 수정 + UI 개선
 
 - **WordPress siteurl/home https 수정**: Secondary 서버 28개 사이트의 `home`/`siteurl`을 `http://` → `https://`로 일괄 수정 (WP-CLI)
@@ -197,3 +206,4 @@
 | 2026-03-13 | Justin | Claude Code | 기존 발행 글 GEO 재적용 로직 보강 기록 추가 |
 | 2026-03-14 | Kevin | Claude Code | 레포 public 전환 + Admin Basic Auth 기록 추가 |
 | 2026-03-14 | Kevin | Claude Code | GEO Phase 2: Product 스키마 + 내부 링크 + llms-full.txt |
+| 2026-04-17 | Hoon | Claude Code | 콘텐츠 제작 상태 복원 버그 수정 + 사이트 생성 batch_error 메시지 표면화 |

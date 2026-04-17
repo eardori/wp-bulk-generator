@@ -65,26 +65,39 @@ export default function ContentPage() {
 
   const handleRestoreState = useCallback(
     (saved: typeof persistState) => {
+      const nonRestorable: ContentStep[] = [
+        "scraping",
+        "fetching-reviews",
+        "generating",
+        "publishing",
+        "selecting",
+        "content-config",
+        "manual",
+      ];
+      const isNonRestorable = nonRestorable.includes(saved.step as ContentStep);
+
       if (saved.articles?.length > 0) {
         setArticles(saved.articles);
         // 진행 중이었던 상태 → preview로 복원 (SSE 재연결 불가)
-        const restoredStep = saved.step === "generating" ? "preview"
+        const restoredStep: ContentStep =
+          saved.step === "generating" ? "preview"
           : saved.step === "publishing" ? "done"
-          : saved.step;
-        setStep(restoredStep as ContentStep);
+          : isNonRestorable ? "input"
+          : (saved.step as ContentStep);
+        setStep(restoredStep);
       } else if (saved.step && saved.step !== "input") {
-        // SSE 재연결 불가한 중간 단계는 input으로 리셋
-        const nonRestorable: ContentStep[] = ["scraping", "fetching-reviews", "generating", "publishing", "selecting", "content-config"];
-        if (nonRestorable.includes(saved.step as ContentStep)) {
+        // SSE 재연결 불가한 중간 단계 + 실패로 넘어간 manual 단계는 input으로 리셋
+        if (isNonRestorable) {
           setStep("input");
         } else {
           setStep(saved.step as ContentStep);
         }
       }
-      if (saved.log?.length > 0) setLog(saved.log);
+      // 복원 불가 단계면 이전 실패 로그/product가 새 세션에 노출되지 않도록 스킵
+      if (!isNonRestorable && saved.log?.length > 0) setLog(saved.log);
       if (saved.genProgress) setGenProgress(saved.genProgress);
       if (saved.pubProgress) setPubProgress(saved.pubProgress);
-      if (saved.product) setProduct(saved.product);
+      if (!isNonRestorable && saved.product) setProduct(saved.product);
       if (saved.contentPrompt) setContentPrompt(saved.contentPrompt);
       if (saved.selectedSites?.length > 0) setSelectedSites(saved.selectedSites);
       if (saved.savedSiteConfigs?.length > 0) setSavedSiteConfigs(saved.savedSiteConfigs);
@@ -103,7 +116,13 @@ export default function ContentPage() {
 
   // Step 1 → 2: Scrape product
   const handleScrape = async (url: string, prompt: string, aeo?: AeoConfig) => {
-    setProductUrl(url);
+    const trimmed = url?.trim() ?? "";
+    if (!trimmed) {
+      setLog(["URL이 비어있습니다. 상품 페이지 링크를 먼저 입력해주세요."]);
+      setStep("input");
+      return;
+    }
+    setProductUrl(trimmed);
     setContentPrompt(prompt);
     setAeoConfig(aeo || null);
     setStep("scraping");
@@ -113,7 +132,7 @@ export default function ContentPage() {
       const res = await fetch("/api/content/scrape-product", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: trimmed }),
         signal: AbortSignal.timeout(45000),
       });
       const data = await res.json();
