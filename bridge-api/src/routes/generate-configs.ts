@@ -7,9 +7,9 @@ import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
 
 const BATCH_SIZE = 10;
 const MAX_SLUG_LENGTH = 15;
-// 2.5-flash는 프리뷰라 503 과부하가 잦음. 기본값을 안정 GA인 2.0-flash로 사용.
-const GEMINI_CONFIG_MODEL = process.env.GEMINI_CONFIG_MODEL || "gemini-2.0-flash";
-const GEMINI_CONFIG_FALLBACK_MODEL = process.env.GEMINI_CONFIG_FALLBACK_MODEL || "gemini-2.0-flash";
+// 2.5-flash는 503 과부하, 2.0-flash는 신규 사용자에게 단종. lite가 부하·가용성 모두 최적.
+const GEMINI_CONFIG_MODEL = process.env.GEMINI_CONFIG_MODEL || "gemini-2.5-flash-lite";
+const GEMINI_CONFIG_FALLBACK_MODEL = process.env.GEMINI_CONFIG_FALLBACK_MODEL || "gemini-2.5-flash";
 const LOCAL_RESERVED_PATHS = [
   process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json",
   process.env.CONFIG_PATH || "/root/wp-sites-config.json",

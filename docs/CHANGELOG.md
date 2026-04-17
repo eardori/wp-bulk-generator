@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-04-18: Gemini 설정 모델을 2.5-flash-lite로 전환
+
+- **원인**: `gemini-2.0-flash`로 바꿨더니 이번엔 404 "no longer available to new users" — Google이 2.0-flash를 신규 프로젝트에는 deprecated 처리. 2.5-flash는 여전히 503(high demand)
+- **조치**: `GEMINI_CONFIG_MODEL`을 `gemini-2.5-flash-lite`로 변경 — 이미 `generate-articles.ts`의 콘텐츠 생성에 쓰이는 모델로, 부하가 낮아 503/404 모두 회피. 폴백은 `gemini-2.5-flash`로 설정 (`bridge-api/src/routes/generate-configs.ts`, `.github/workflows/deploy-bridge.yml`)
+
 ## 2026-04-18: Bridge 서버 Gemini 모델 env 강제 전환
 
 - **원인**: 2026-04-17에 코드 기본값을 `gemini-2.5-flash` → `gemini-2.0-flash`로 바꿨지만, Bridge 서버 `.env`에 남아있던 `GEMINI_CONFIG_MODEL=gemini-2.5-flash`가 여전히 오버라이드 — 재배포 후에도 사이트 생성이 503(high demand)로 실패
@@ -223,3 +228,4 @@
 | 2026-04-17 | Hoon | Claude Code | 도메인별 사이트 그룹화 UI: 대시보드 도메인 탭 + 콘텐츠 생성 섹션 접기/펼치기·도메인별 일괄 조작 |
 | 2026-04-17 | Hoon | Claude Code | deploy-bridge 워크플로우 SSH keepalive + 빌드 메모리 제한 추가 (Lightsail idle timeout 방지) |
 | 2026-04-18 | Hoon | Claude Code | deploy-bridge에 GEMINI_CONFIG_MODEL=gemini-2.0-flash 강제 갱신 추가 — 서버 .env의 2.5-flash 잔존값이 503 유발 |
+| 2026-04-18 | Hoon | Claude Code | 2.0-flash 404 deprecated → GEMINI_CONFIG_MODEL을 gemini-2.5-flash-lite로 최종 전환 |
