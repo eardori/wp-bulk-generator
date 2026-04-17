@@ -7,7 +7,7 @@
   - 복원 불가 단계면 이전 `log`/`product` 복원을 스킵해 에러 잔상 제거
   - `handleScrape` 시작부에 빈/공백 URL 가드 추가 (방어적 입력 정규화)
 - **사이트 생성 배치 에러 원인 노출**: `batch_error` SSE 이벤트의 `message` 필드를 UI `partialWarning`에 함께 표시 (`admin/src/app/page.tsx`). 기존에는 "배치 1/1에서 중단됨"만 보이고 Gemini 호출 실패 원인(모델명·한도 등)이 숨겨져 원인 파악이 어려웠음
-- **후속**: Bridge 서버 `GEMINI_CONFIG_MODEL` 및 API 키 상태 확인 필요 — 실제 에러 문구 확인 후 모델 조정 또는 쿼터 해소
+- **Gemini 모델 503 대응**: 사이트 생성이 `gemini-2.5-flash` 503(Service Unavailable: high demand)으로 실패 — 기본 모델을 안정 GA인 `gemini-2.0-flash`로 전환하고 `callGeminiWithRetry`에 503/500 재시도 로직 추가 (`bridge-api/src/routes/generate-configs.ts`)
 
 ## 2026-04-15: WordPress siteurl https 일괄 수정 + UI 개선
 
