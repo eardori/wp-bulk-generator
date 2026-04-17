@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-18: 콘텐츠 생성 탭 = 범위 UX 개선
+
+- **문제**: 도메인 그룹 탭으로 좁혀 보고 있어도 "전체 선택"/바닥 생성 버튼은 전역 기준으로 집계 — 탭에서 50개만 보이는데 200개가 생성되는 혼동 발생 (Hoon 보고)
+- **조치**: 탭이 생성 범위를 결정하도록 변경. `ContentConfigPanel.tsx`에서 `scopedConfigs` / `scopedEnabled` 를 별도 산출해 상단 카운트·바닥 실시간/Job 버튼·handleGenerate/handleSubmitJob 모두 현재 탭 기준으로 작동
+- **UX 개선**: 탭 헤더에 "선택한 탭이 생성 범위" 힌트 추가. 헤더 카운트에 "myground.website 범위" 라벨. 일괄 바에 (전체 N개) 보조 표시. 버튼 라벨에 "{탭명} {N}개 실시간 생성"
+- **그대로 유지**: "전체" 탭에서는 기존대로 모든 사이트가 범위. 탭 간 선택 상태는 독립적으로 보존 (탭 전환 시 선택이 사라지지 않음)
+
 ## 2026-04-18: Gemini 설정 모델을 2.5-flash-lite로 전환
 
 - **원인**: `gemini-2.0-flash`로 바꿨더니 이번엔 404 "no longer available to new users" — Google이 2.0-flash를 신규 프로젝트에는 deprecated 처리. 2.5-flash는 여전히 503(high demand)
@@ -229,3 +236,4 @@
 | 2026-04-17 | Hoon | Claude Code | deploy-bridge 워크플로우 SSH keepalive + 빌드 메모리 제한 추가 (Lightsail idle timeout 방지) |
 | 2026-04-18 | Hoon | Claude Code | deploy-bridge에 GEMINI_CONFIG_MODEL=gemini-2.0-flash 강제 갱신 추가 — 서버 .env의 2.5-flash 잔존값이 503 유발 |
 | 2026-04-18 | Hoon | Claude Code | 2.0-flash 404 deprecated → GEMINI_CONFIG_MODEL을 gemini-2.5-flash-lite로 최종 전환 |
+| 2026-04-18 | Hoon | Claude Code | 콘텐츠 생성 탭 = 범위로 동작하도록 ContentConfigPanel 개선 (탭 전환 시 생성 범위 자동 축소) |
