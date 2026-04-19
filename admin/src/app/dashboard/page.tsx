@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { bridgeSSE, readSSEStream } from "@/lib/bridge-sse";
+import { getDomainGroup, getDomainGroupColor, type DomainGroup } from "@/lib/domainGroup";
 
 type Persona = {
   name: string;
@@ -309,6 +310,7 @@ export default function DashboardPage() {
   const [siteFilter, setSiteFilter] = useState("");
   const [groupFilter, setGroupFilter] = useState<string>("all");
   const [serverFilter, setServerFilter] = useState<"all" | "primary" | "secondary">("all");
+  const [domainFilter, setDomainFilter] = useState<"all" | DomainGroup>("all");
 
   const load = useCallback(() => {
     setLoading(true);
@@ -371,6 +373,20 @@ export default function DashboardPage() {
   const primarySitesCount = sites.filter((site) => getServerId(site) === "primary").length;
   const secondarySitesCount = sites.filter((site) => getServerId(site) === "secondary").length;
 
+  // 도메인 탭 — 사이트에 존재하는 도메인만 동적으로 노출 (정렬 고정: myground → allmyreview → 기타)
+  const domainTabs = useMemo(() => {
+    const order: DomainGroup[] = ["myground.website", "allmyreview.site", "기타"];
+    const present = new Set(sites.map(getDomainGroup));
+    const groupTabs = order
+      .filter((g) => present.has(g))
+      .map((g) => ({
+        id: g,
+        label: g,
+        count: sites.filter((s) => getDomainGroup(s) === g).length,
+      }));
+    return [{ id: "all" as const, label: "전체", count: sites.length }, ...groupTabs];
+  }, [sites]);
+
   // Map slug → group names
   const slugToGroups: Record<string, string[]> = {};
   groups.forEach((g) => {
@@ -397,7 +413,10 @@ export default function DashboardPage() {
     const matchServer =
       serverFilter === "all" || getServerId(s) === serverFilter;
 
-    return matchText && matchGroup && matchServer;
+    const matchDomain =
+      domainFilter === "all" || getDomainGroup(s) === domainFilter;
+
+    return matchText && matchGroup && matchServer && matchDomain;
   });
 
   // ── Render ────────────────────────────────────────────────────
@@ -605,6 +624,31 @@ export default function DashboardPage() {
             )}
           </h3>
 
+          {/* 도메인 탭 */}
+          <div className="flex flex-wrap items-center gap-2">
+            {domainTabs.map((tab) => {
+              const isActive = domainFilter === tab.id;
+              const color = tab.id === "all" ? null : getDomainGroupColor(tab.id);
+              const activeClass = color
+                ? `${color.activeBg} ${color.activeText} ${color.activeBorder}`
+                : "bg-emerald-500 text-white border-emerald-500";
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setDomainFilter(tab.id as "all" | DomainGroup)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                    isActive
+                      ? activeClass
+                      : `bg-gray-800 border-gray-700 ${color ? color.text : "text-gray-300"} hover:border-gray-600`
+                  }`}
+                >
+                  {tab.label} {loading ? "" : `${tab.count}개`}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 서버 필터 탭 */}
           <div className="flex flex-wrap items-center gap-2">
             {[
               { id: "all", label: "전체", count: sites.length },
@@ -675,7 +719,7 @@ export default function DashboardPage() {
           <>
             <p className="text-xs text-gray-600 mb-3">
               {filteredSites.length}개 사이트
-              {siteFilter || groupFilter !== "all" || serverFilter !== "all"
+              {siteFilter || groupFilter !== "all" || serverFilter !== "all" || domainFilter !== "all"
                 ? ` (필터 적용됨)`
                 : ""}
             </p>
