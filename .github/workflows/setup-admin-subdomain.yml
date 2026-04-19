@@ -1,0 +1,109 @@
+name: Setup admin.allmyreview.site (one-off)
+
+# Vercel 배포가 중단된 상황에서 Lightsail의 Admin Backup(:3000)을
+# admin.allmyreview.site 서브도메인으로 노출하기 위한 일회성 세팅.
+# workflow_dispatch로만 실행. 반복 실행해도 idempotent.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    name: Configure Nginx + SSL for admin.allmyreview.site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          cat >> ~/.ssh/config <<EOF
+          Host deploy-server
+            HostName ${{ secrets.SSH_HOST }}
+            User ${{ secrets.SSH_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
+            ServerAliveInterval 30
+            ServerAliveCountMax 40
+          EOF
+
+      - name: Verify admin backup is running on :3000
+        run: |
+          ssh deploy-server << 'ENDSSH'
+            set -e
+            if ! curl -sf http://localhost:3000 -o /dev/null; then
+              echo "⚠️ Admin :3000 not responding. Triggering rebuild-admin.sh..."
+              cd /home/ubuntu/wp-bulk-generator && bash scripts/rebuild-admin.sh
+              sleep 5
+              curl -sf http://localhost:3000 -o /dev/null && echo "✅ Admin :3000 up" || (echo "❌ Admin still down"; exit 1)
+            else
+              echo "✅ Admin :3000 already running"
+            fi
+          ENDSSH
+
+      - name: Write Nginx server block
+        run: |
+          ssh deploy-server << 'ENDSSH'
+            set -e
+            sudo tee /etc/nginx/sites-available/admin.allmyreview.site > /dev/null <<'NGINX'
+          server {
+              listen 80;
+              listen [::]:80;
+              server_name admin.allmyreview.site;
+
+              # certbot 발급 전 임시 HTTP 서빙. 발급 후 certbot --nginx 이 자동으로 443 블록 추가.
+              location / {
+                  proxy_pass http://127.0.0.1:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+
+                  # Next.js SSE / 긴 AI 호출 대응
+                  proxy_read_timeout 600s;
+                  proxy_send_timeout 600s;
+                  proxy_buffering off;
+                  client_max_body_size 25m;
+              }
+          }
+          NGINX
+
+            sudo ln -sf /etc/nginx/sites-available/admin.allmyreview.site /etc/nginx/sites-enabled/admin.allmyreview.site
+            sudo nginx -t
+            sudo systemctl reload nginx
+            echo "✅ Nginx HTTP block applied"
+          ENDSSH
+
+      - name: Issue Let's Encrypt cert (certbot --nginx)
+        run: |
+          ssh deploy-server << 'ENDSSH'
+            set -e
+            # 이미 발급되어 있으면 skip
+            if sudo test -f /etc/letsencrypt/live/admin.allmyreview.site/fullchain.pem; then
+              echo "✅ Cert already exists for admin.allmyreview.site"
+            else
+              sudo certbot --nginx -d admin.allmyreview.site --non-interactive --agree-tos -m hoon712@gmail.com --redirect
+              echo "✅ Cert issued + HTTPS redirect configured"
+            fi
+            sudo nginx -t && sudo systemctl reload nginx
+          ENDSSH
+
+      - name: Verify external HTTPS
+        run: |
+          sleep 3
+          curl -sSfI https://admin.allmyreview.site -o /tmp/hdr 2>&1 | head -5
+          echo "--- headers ---"
+          head -15 /tmp/hdr || true
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://admin.allmyreview.site)
+          echo "External status: $STATUS"
+          if [[ "$STATUS" =~ ^(200|401|302|307)$ ]]; then
+            echo "✅ admin.allmyreview.site responding"
+          else
+            echo "❌ Unexpected status $STATUS"
+            exit 1
+          fi

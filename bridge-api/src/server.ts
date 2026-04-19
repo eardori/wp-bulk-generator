@@ -27,6 +27,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const DEFAULT_ALLOWED_ORIGINS = [
   "https://wp.multiful.ai",
   "https://wp-bulk-generator.vercel.app",
+  "https://admin.allmyreview.site",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ];

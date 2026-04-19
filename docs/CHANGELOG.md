@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-19: Vercel DEPLOYMENT_DISABLED 임시 우회 — admin.allmyreview.site 개설
+
+- **상황**: `wp.multiful.ai`가 Vercel 402 `DEPLOYMENT_DISABLED`로 접속 불가 (계정 한도/결제 이슈, 해당 Vercel 계정이 Hoon 팀 아래 없어 CLI 해결 불가)
+- **조치**: Lightsail의 Admin Backup(:3000)을 `admin.allmyreview.site` 서브도메인으로 노출. DNS는 이미 Lightsail IP를 가리키고 있어 Nginx 리버스 프록시 + Let's Encrypt SSL만 세팅 (`.github/workflows/setup-admin-subdomain.yml`, workflow_dispatch 일회성 실행)
+- **Bridge CORS 허용 추가**: `admin.allmyreview.site`를 기본 허용 origin에 추가 (`bridge-api/src/server.ts`, `.env.example`)
+- **Hoon 후속 작업**: Vercel 계정에서 Usage/Billing 확인해 원복 — 복구되면 이 서브도메인은 fallback으로 유지
+
 ## 2026-04-18: 콘텐츠 생성 탭 = 범위 UX 개선
 
 - **문제**: 도메인 그룹 탭으로 좁혀 보고 있어도 "전체 선택"/바닥 생성 버튼은 전역 기준으로 집계 — 탭에서 50개만 보이는데 200개가 생성되는 혼동 발생 (Hoon 보고)
@@ -237,3 +244,4 @@
 | 2026-04-18 | Hoon | Claude Code | deploy-bridge에 GEMINI_CONFIG_MODEL=gemini-2.0-flash 강제 갱신 추가 — 서버 .env의 2.5-flash 잔존값이 503 유발 |
 | 2026-04-18 | Hoon | Claude Code | 2.0-flash 404 deprecated → GEMINI_CONFIG_MODEL을 gemini-2.5-flash-lite로 최종 전환 |
 | 2026-04-18 | Hoon | Claude Code | 콘텐츠 생성 탭 = 범위로 동작하도록 ContentConfigPanel 개선 (탭 전환 시 생성 범위 자동 축소) |
+| 2026-04-19 | Hoon | Claude Code | Vercel DEPLOYMENT_DISABLED 우회용 admin.allmyreview.site 서브도메인 세팅 워크플로우 + Bridge CORS 갱신 |
