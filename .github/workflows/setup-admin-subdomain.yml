@@ -36,11 +36,21 @@ jobs:
             if ! curl -sf http://localhost:3000 -o /dev/null; then
               echo "⚠️ Admin :3000 not responding. Triggering rebuild-admin.sh..."
               cd /home/ubuntu/wp-bulk-generator && bash scripts/rebuild-admin.sh
-              sleep 5
-              curl -sf http://localhost:3000 -o /dev/null && echo "✅ Admin :3000 up" || (echo "❌ Admin still down"; exit 1)
             else
-              echo "✅ Admin :3000 already running"
+              echo "✅ Admin :3000 already responding (pre-check)"
             fi
+            # Next.js 부팅까지 최대 60초 대기 (2초 간격 30회 재시도)
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:3000 -o /dev/null 2>&1; then
+                echo "✅ Admin :3000 ready (after $((i*2))s)"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "❌ Admin :3000 still down after 60s"
+            pm2 show wp-bulk-generator | tail -30 || true
+            pm2 logs wp-bulk-generator --lines 40 --nostream || true
+            exit 1
           ENDSSH
 
       - name: Write Nginx server block
