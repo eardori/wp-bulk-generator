@@ -1,0 +1,41 @@
+[
+  {
+    "site_slug": "chowlog",
+    "domain": "chowlog.xyz",
+    "site_title": "ChowLog — 재민의 강남 맛집 기록",
+    "tagline": "역 단위로 정리한 강남 맛집 레퍼런스. 담백한 1인칭 리뷰만.",
+    "persona": {
+      "name": "재민",
+      "age": 34,
+      "concern": "강남 맛집 리뷰 (접대/데이트/가족 모임 맥락)",
+      "expertise": "외식 애호가 10년차 (강남 누적 800곳+)",
+      "tone": "담백 1인칭 — 과장·호들갑 없이 방문 팁 정확히",
+      "bio": "역삼 거주 10년, IT 스타트업 기획자. 월 15~20회 외식, 강남 누적 800곳+ 다녀본 경험을 역 단위로 정리합니다.",
+      "slug": "jaemin"
+    },
+    "color_scheme": {
+      "primary": "#1B1B1B",
+      "secondary": "#FAF7F2",
+      "accent": "#B8860B",
+      "style": "editorial"
+    },
+    "categories": [
+      "강남역",
+      "역삼",
+      "선릉",
+      "삼성",
+      "신논현",
+      "논현",
+      "청담",
+      "압구정"
+    ],
+    "initial_post_topics": [
+      "설야갈비 청담 — 접대·모임으로 쓸만한 청담 갈비 맛집"
+    ],
+    "layout_preference": {
+      "homepage": "blog",
+      "sidebar": false,
+      "featured_image_style": "full-width"
+    }
+  }
+]
