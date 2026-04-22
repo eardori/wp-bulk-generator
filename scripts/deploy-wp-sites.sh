@@ -541,7 +541,10 @@ site_url_for_domain() {
   elif get_individual_cert_dir "$domain" >/dev/null 2>&1; then
     printf 'https://%s' "$domain"
   else
-    printf 'http://%s' "$domain"
+    # 2026-04-22 재발 방지: fallback 을 https 로. 모든 사이트가 Let's Encrypt 자동 발급되므로
+    # http 는 사실상 없음. 배포 시점에 아직 SSL 발급 전이어도 결과적으로 https 로 서빙됨.
+    # 이전: 'http://' → aeo-schema.php / canonical 등 AEO 신호가 http 로 오염되는 사례 발생
+    printf 'https://%s' "$domain"
   fi
 }
 
@@ -1260,7 +1263,9 @@ ensure_schema_mu_plugin() {
 
 add_action('wp_head', function() {
     echo '<script type="application/ld+json">' . PHP_EOL;
-    echo '{ "@context": "https://schema.org", "@type": "Organization", "name": "${escaped_title}", "url": "${site_url}" }' . PHP_EOL;
+    // 2026-04-22 재발 방지: url 을 https 하드코딩 (site_url_for_domain 결과 대신).
+    // Codex AEO 리뷰에서 http 로 박혀있던 버그 근본 차단.
+    echo '{ "@context": "https://schema.org", "@type": "Organization", "name": "${escaped_title}", "url": "https://${domain}" }' . PHP_EOL;
     echo '</script>' . PHP_EOL;
 }, 1);
 SCHEMAPHP
