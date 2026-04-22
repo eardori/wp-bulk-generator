@@ -1,6 +1,7 @@
 // Codex AEO 리뷰 (2026-04-21/22) 반영: WordPress user 의 display_name/description/slug 를
 // persona 기반으로 동기화. publish 시점(publish-articles.ts)과 수동 트리거(/deploy/refresh-aeo)
-// 둘 다에서 재사용되는 공용 로직.
+// 둘 다에서 재사용되는 공용 로직. AEO 목표: AI 답변 엔진(ChatGPT/Gemini/Claude)에서 인용 시
+// 작성자 identity 가 모든 신호(meta author, Yoast Person, author archive URL) 에서 일관되어야 함.
 
 export type PersonaInput = {
   name: string;
