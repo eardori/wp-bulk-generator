@@ -49,6 +49,7 @@ type SiteCredential = {
     expertise?: string;
     tone?: string;
     bio?: string;
+    slug?: string;
   };
   site_dir?: string;
   server_id?: string;
@@ -807,12 +808,18 @@ async function resolveAndSyncAuthorUserId(
     if (persona?.name) {
       const currentName = String(me?.name || "").trim();
       const currentDesc = String(me?.description || "").trim();
+      const currentSlug = String(me?.slug || "").trim();
       const desiredName = persona.name.trim();
       const desiredDesc = (persona.bio || "").trim();
+      // Codex AEO 리뷰 (2026-04-22): author URL 이 /author/admin/ 로 남아 페르소나 identity 와 불일치.
+      // persona.slug 명시되면 그 slug, 아니면 site.slug (로마자 안전) 로 user_nicename 동기화.
+      const rawSlug = (persona.slug || site.slug || "").toLowerCase().trim();
+      const desiredSlug = rawSlug.replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
       const nameNeedsSync = currentName !== desiredName;
       const descNeedsSync = !!desiredDesc && currentDesc !== desiredDesc;
+      const slugNeedsSync = !!desiredSlug && currentSlug !== desiredSlug;
 
-      if (nameNeedsSync || descNeedsSync) {
+      if (nameNeedsSync || descNeedsSync || slugNeedsSync) {
         await fetch(`${baseUrl}/wp-json/wp/v2/users/${userId}`, {
           method: "POST",
           headers: wpHeaders,
@@ -820,6 +827,7 @@ async function resolveAndSyncAuthorUserId(
             name: desiredName,
             first_name: desiredName,
             ...(desiredDesc ? { description: desiredDesc } : {}),
+            ...(desiredSlug ? { slug: desiredSlug } : {}),
           }),
           signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
         }).catch(() => {

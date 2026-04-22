@@ -153,6 +153,16 @@ export function isBingWebmasterSyncEnabled(domain?: string) {
   return Boolean(getApiKeyForDomain(domain));
 }
 
+// SubmitUrlBatch (발행 시 URL 단건 제출) 전용 kill-switch.
+// 2026-04-22 Bing 적극 제출 금지 방침 — 기본값 false. 명시적 "true" 로만 활성화.
+// "Bing 이 스스로 크롤링하도록" 전략이므로 능동 제출을 기본 차단.
+export function isBingUrlSubmissionEnabled(domain?: string) {
+  const enabled =
+    (process.env.BING_URL_SUBMISSION_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) return false;
+  return isBingWebmasterSyncEnabled(domain);
+}
+
 function chunkUrls(urls: string[], chunkSize: number) {
   const chunks: string[][] = [];
   for (let index = 0; index < urls.length; index += chunkSize) {

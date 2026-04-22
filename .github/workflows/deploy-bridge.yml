@@ -60,6 +60,17 @@ jobs:
             else
               echo 'BING_WEBMASTER_API_KEY_MYGROUND=${{ secrets.BING_WEBMASTER_API_KEY_MYGROUND }}' >> "\$ENV_FILE"
             fi
+            # INDEXNOW_API_KEY — 모든 서버(deploy-wp-sites.sh 포함)가 같은 키를 공유해야 함
+            if [ -n '${{ secrets.INDEXNOW_API_KEY }}' ]; then
+              if grep -q '^INDEXNOW_API_KEY=' "\$ENV_FILE" 2>/dev/null; then
+                sed -i 's|^INDEXNOW_API_KEY=.*|INDEXNOW_API_KEY=${{ secrets.INDEXNOW_API_KEY }}|' "\$ENV_FILE"
+              else
+                echo 'INDEXNOW_API_KEY=${{ secrets.INDEXNOW_API_KEY }}' >> "\$ENV_FILE"
+              fi
+              # shell 스크립트용 /root/.wp-bulk-indexnow-key 도 동기화
+              sudo tee /root/.wp-bulk-indexnow-key > /dev/null <<< '${{ secrets.INDEXNOW_API_KEY }}'
+              sudo chmod 600 /root/.wp-bulk-indexnow-key
+            fi
             # GEMINI_CONFIG_MODEL: 2.5-flash는 503 과부하, 2.0-flash는 신규 단종 → lite로 고정
             if grep -q '^GEMINI_CONFIG_MODEL=' "\$ENV_FILE" 2>/dev/null; then
               sed -i 's|^GEMINI_CONFIG_MODEL=.*|GEMINI_CONFIG_MODEL=gemini-2.5-flash-lite|' "\$ENV_FILE"
@@ -71,6 +82,14 @@ jobs:
             else
               echo 'GEMINI_CONFIG_FALLBACK_MODEL=gemini-2.5-flash' >> "\$ENV_FILE"
             fi
+            # 2026-04-22 Bing 적극 제출 금지 방침 — 서버 env 에 false 강제
+            for KEY in BING_URL_SUBMISSION_ENABLED INDEXNOW_ENABLED; do
+              if grep -q "^\${KEY}=" "\$ENV_FILE" 2>/dev/null; then
+                sed -i "s|^\${KEY}=.*|\${KEY}=false|" "\$ENV_FILE"
+              else
+                echo "\${KEY}=false" >> "\$ENV_FILE"
+              fi
+            done
           ENDSSH
 
       - name: Restart services
