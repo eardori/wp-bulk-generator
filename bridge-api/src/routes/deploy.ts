@@ -7,9 +7,13 @@ import { setupSSE } from "../utils/sse.js";
 import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
 import { seedDashboardSiteCaches } from "../lib/dashboard-cache.js";
 import {
+  isBingUrlSubmissionEnabled,
   isBingWebmasterSyncEnabled,
+  submitBingUrls,
   syncBingSite,
 } from "../lib/bing-webmaster.js";
+import { isIndexNowEnabled, submitIndexNow } from "../lib/indexnow.js";
+import { syncWpAuthorFromPersona } from "../lib/author-sync.js";
 import {
   getDefaultDeployTarget,
   getPrimaryServerTarget,
@@ -718,6 +722,133 @@ export async function deployRoutes(app: FastifyInstance) {
     }
   });
 
+  // 기존 발행된 모든 WP 글을 Bing SubmitUrlBatch + IndexNow로 일괄 재제출
+  // 요청 body (모두 optional):
+  //   { domainFilter?: string, slugs?: string[], perSiteLimit?: number }
+  app.post("/deploy/resubmit-bing-urls", async (req, reply) => {
+    const { send, close } = setupSSE(reply);
+    const body = (req.body || {}) as {
+      domainFilter?: string;
+      slugs?: string[];
+      perSiteLimit?: number;
+    };
+    const perSiteLimit = Math.min(Math.max(body.perSiteLimit || 200, 1), 1000);
+    const slugFilter = body.slugs?.length
+      ? new Set(body.slugs.map((s) => s.toLowerCase()))
+      : null;
+
+    try {
+      const sites = readExistingSites() as StoredCredential[];
+      let targets = sites.filter((s) => s.domain && !isExcludedSiteSlug(normalizeSlug(s.site_slug ?? s.slug)));
+      if (body.domainFilter) {
+        const needle = body.domainFilter.toLowerCase();
+        targets = targets.filter((s) => (s.domain || "").toLowerCase().includes(needle));
+      }
+      if (slugFilter) {
+        targets = targets.filter((s) => slugFilter.has(normalizeSlug(s.site_slug ?? s.slug)));
+      }
+
+      send({ type: "log", message: `대상 사이트 ${targets.length}개` });
+
+      if (!isBingWebmasterSyncEnabled() && !isIndexNowEnabled()) {
+        send({ type: "error", message: "BING_WEBMASTER_API_KEY / INDEXNOW_API_KEY 모두 미설정 — 아무것도 제출할 수 없습니다." });
+        return;
+      }
+
+      let totalUrls = 0;
+      let bingSubmitted = 0;
+      let bingErrors = 0;
+      let indexNowSubmitted = 0;
+      let indexNowErrors = 0;
+
+      for (const site of targets) {
+        const domain = site.domain!;
+        const host = domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+        const base = `https://${host}`;
+
+        // WP REST API 로 발행된 글 URL 수집 (페이지네이션)
+        const urls: string[] = [];
+        try {
+          let page = 1;
+          while (urls.length < perSiteLimit) {
+            const perPage = Math.min(100, perSiteLimit - urls.length);
+            const endpoint = `${base}/wp-json/wp/v2/posts?status=publish&per_page=${perPage}&page=${page}&_fields=link`;
+            const res = await fetch(endpoint, {
+              signal: AbortSignal.timeout(15000),
+              headers: { "User-Agent": "wp-bulk-generator/resubmit" },
+            });
+            if (!res.ok) {
+              if (res.status === 400 || res.status === 404) break; // 페이지 끝
+              throw new Error(`HTTP ${res.status} ${await res.text().then((t) => t.slice(0, 120)).catch(() => "")}`);
+            }
+            const items = (await res.json()) as Array<{ link?: string }>;
+            if (!Array.isArray(items) || items.length === 0) break;
+            for (const it of items) {
+              if (it.link && typeof it.link === "string") {
+                // 내부 http→https 방어
+                urls.push(it.link.replace(/^http:\/\//, "https://"));
+              }
+            }
+            if (items.length < perPage) break;
+            page += 1;
+          }
+        } catch (err) {
+          send({ type: "log", message: `  ✗ ${domain} URL 수집 실패: ${err instanceof Error ? err.message : String(err)}` });
+          continue;
+        }
+
+        if (urls.length === 0) {
+          send({ type: "log", message: `  - ${domain}: 발행 글 없음` });
+          continue;
+        }
+        totalUrls += urls.length;
+        send({ type: "log", message: `  • ${domain}: ${urls.length}개 URL 수집` });
+
+        // Bing SubmitUrlBatch — BING_URL_SUBMISSION_ENABLED=false 면 건너뜀
+        if (isBingUrlSubmissionEnabled(base)) {
+          try {
+            const result = await submitBingUrls(urls, base);
+            bingSubmitted += result.submitted;
+            if (result.errors.length > 0) {
+              bingErrors += result.errors.length;
+              send({ type: "log", message: `    Bing 경고: ${result.errors[0]}` });
+            }
+            send({ type: "log", message: `    ↳ Bing: ${result.submitted}건 제출 (batch ${result.batches})` });
+          } catch (err) {
+            bingErrors += 1;
+            send({ type: "log", message: `    ✗ Bing 실패: ${err instanceof Error ? err.message : String(err)}` });
+          }
+        }
+
+        // IndexNow (호스트별 일괄)
+        if (isIndexNowEnabled()) {
+          try {
+            const result = await submitIndexNow(urls, host);
+            if (result.success) {
+              indexNowSubmitted += result.submitted;
+              send({ type: "log", message: `    ↳ IndexNow: ${result.submitted}건 (${result.statusCode})` });
+            } else if (result.error) {
+              indexNowErrors += 1;
+              send({ type: "log", message: `    ✗ IndexNow: ${result.error}` });
+            }
+          } catch (err) {
+            indexNowErrors += 1;
+            send({ type: "log", message: `    ✗ IndexNow 실패: ${err instanceof Error ? err.message : String(err)}` });
+          }
+        }
+      }
+
+      send({
+        type: "done",
+        message: `완료 — 수집 ${totalUrls}건 / Bing 제출 ${bingSubmitted} (오류 ${bingErrors}) / IndexNow 제출 ${indexNowSubmitted} (오류 ${indexNowErrors})`,
+      });
+    } catch (error) {
+      send({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      close();
+    }
+  });
+
   app.post("/deploy", async (req, reply) => {
     const { configs } = req.body as { configs: DeployConfig[] };
 
@@ -1015,5 +1146,121 @@ export async function deployRoutes(app: FastifyInstance) {
       deployCleanup();
       close();
     }
+  });
+
+  // 단일 사이트의 AEO 관련 설정을 즉시 재적용.
+  // (1) credentials 에 persona.slug 영구 저장
+  // (2) MU-plugin(ai-seo-optimize.php) 재설치 — Yoast wordCount 필터 등 최신 상태로
+  // (3) WP object cache flush
+  // (4) WP user 의 display_name/description/slug 를 persona 로 동기화
+  // body: { slug: string, personaSlug?: string }
+  app.post("/deploy/refresh-aeo", async (req, reply) => {
+    type RefreshBody = { slug?: string; personaSlug?: string };
+    type RefreshCredential = StoredCredential & {
+      persona?: { name: string; bio?: string; slug?: string };
+    };
+    const body = (req.body || {}) as RefreshBody;
+    const slug = String(body.slug || "").trim();
+    const rawPersonaSlug = body.personaSlug ? String(body.personaSlug).trim() : "";
+    if (!slug) {
+      reply.code(400);
+      return { error: "slug is required" };
+    }
+
+    let credentials: RefreshCredential[];
+    try {
+      credentials = JSON.parse(readFileSync(CREDS_PATH, "utf-8")) as RefreshCredential[];
+    } catch (e) {
+      reply.code(500);
+      return {
+        error: `failed to load credentials (${CREDS_PATH}): ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
+    }
+
+    const siteIndex = credentials.findIndex(
+      (c) => (c.slug || c.site_slug) === slug
+    );
+    if (siteIndex < 0) {
+      reply.code(404);
+      return { error: `site not found: ${slug}` };
+    }
+    const site = credentials[siteIndex];
+    const result: Record<string, unknown> = { slug };
+
+    // 1. credentials 에 personaSlug 영구 저장
+    if (rawPersonaSlug) {
+      const sanitized = rawPersonaSlug
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      if (sanitized) {
+        const existingPersona = site.persona || { name: "" };
+        if (existingPersona.slug !== sanitized) {
+          existingPersona.slug = sanitized;
+          site.persona = existingPersona;
+          credentials[siteIndex] = site;
+          try {
+            writeFileSync(CREDS_PATH, JSON.stringify(credentials, null, 2));
+            result.credentialsUpdated = { personaSlug: sanitized };
+          } catch (e) {
+            result.credentialsUpdateError =
+              e instanceof Error ? e.message : String(e);
+          }
+        } else {
+          result.credentialsUpdated = { personaSlug: sanitized, noChange: true };
+        }
+      }
+    }
+
+    // 2. MU-plugin 재설치 (sudo bash)
+    const siteDir = `/var/www/${slug}`;
+    try {
+      execSync(
+        `sudo -n bash -c "cd /home/ubuntu/wp-bulk-generator && source scripts/deploy-wp-sites.sh && ensure_seo_mu_plugin '${siteDir}'"`,
+        { stdio: "pipe", timeout: 30000 }
+      );
+      result.muPluginUpdated = true;
+    } catch (e) {
+      result.muPluginError =
+        e instanceof Error ? e.message.slice(0, 400) : String(e).slice(0, 400);
+    }
+
+    // 3. WP object cache flush
+    try {
+      execSync(
+        `sudo -n wp cache flush --path="${siteDir}" --allow-root`,
+        { stdio: "pipe", timeout: 15000 }
+      );
+      result.cacheFlushed = true;
+    } catch (e) {
+      result.cacheFlushError =
+        e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200);
+    }
+
+    // 4. WP user 동기화 (display_name/description/slug → persona)
+    const domainRaw = site.domain || "";
+    const host = domainRaw.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    const adminUser = site.admin_user || "";
+    const appPass = site.app_pass || "";
+    if (host && adminUser && appPass) {
+      const baseUrl = `https://${host}`;
+      const authHeader =
+        "Basic " + Buffer.from(`${adminUser}:${appPass}`).toString("base64");
+      const syncResult = await syncWpAuthorFromPersona(
+        { slug, persona: site.persona },
+        baseUrl,
+        { "Content-Type": "application/json", Authorization: authHeader }
+      );
+      result.authorSync = syncResult;
+    } else {
+      result.authorSync = {
+        updated: false,
+        error: "missing domain/admin_user/app_pass in credentials",
+      };
+    }
+
+    return result;
   });
 }
