@@ -9,7 +9,9 @@ import { sanitizeGeneratedArticle } from "../lib/article-sanitizer.js";
 import { updateDashboardSiteCache } from "../lib/dashboard-cache.js";
 import { buildBusinessSchemaFromHtml, stripReviewReferenceMarkers } from "../lib/business-schema.js";
 import {
+  isBingUrlSubmissionEnabled,
   isBingWebmasterSyncEnabled,
+  submitBingUrls,
   syncBingSite,
 } from "../lib/bing-webmaster.js";
 import {
@@ -772,6 +774,68 @@ function buildRelatedPostsHtml(relatedPosts: Array<{ title: string; url: string 
 </div>`;
 }
 
+// Codex AEO 리뷰 (2026-04-21) 반영: 모든 글이 author=admin 으로 찍혀 페르소나와 identity 불일치.
+// publish 시 app_pass 소유 user(=보통 admin) 의 display_name/description 을 persona 로 동기화하고
+// post.author 를 그 user id 로 명시. 사이트당 1회 조회 후 캐시.
+const SITE_AUTHOR_USER_ID_CACHE = new Map<string, number>();
+
+async function resolveAndSyncAuthorUserId(
+  site: SiteCredential,
+  baseUrl: string,
+  wpHeaders: Record<string, string>
+): Promise<number | undefined> {
+  const cached = SITE_AUTHOR_USER_ID_CACHE.get(site.slug);
+  if (cached !== undefined) return cached > 0 ? cached : undefined;
+
+  try {
+    const meRes = await fetch(`${baseUrl}/wp-json/wp/v2/users/me?context=edit`, {
+      headers: wpHeaders,
+      signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
+    });
+    if (!meRes.ok) {
+      SITE_AUTHOR_USER_ID_CACHE.set(site.slug, 0);
+      return undefined;
+    }
+    const me = await meRes.json();
+    const userId = parsePositiveInt(me?.id);
+    if (!userId) {
+      SITE_AUTHOR_USER_ID_CACHE.set(site.slug, 0);
+      return undefined;
+    }
+
+    const persona = site.persona;
+    if (persona?.name) {
+      const currentName = String(me?.name || "").trim();
+      const currentDesc = String(me?.description || "").trim();
+      const desiredName = persona.name.trim();
+      const desiredDesc = (persona.bio || "").trim();
+      const nameNeedsSync = currentName !== desiredName;
+      const descNeedsSync = !!desiredDesc && currentDesc !== desiredDesc;
+
+      if (nameNeedsSync || descNeedsSync) {
+        await fetch(`${baseUrl}/wp-json/wp/v2/users/${userId}`, {
+          method: "POST",
+          headers: wpHeaders,
+          body: JSON.stringify({
+            name: desiredName,
+            first_name: desiredName,
+            ...(desiredDesc ? { description: desiredDesc } : {}),
+          }),
+          signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
+        }).catch(() => {
+          /* best effort */
+        });
+      }
+    }
+
+    SITE_AUTHOR_USER_ID_CACHE.set(site.slug, userId);
+    return userId;
+  } catch {
+    SITE_AUTHOR_USER_ID_CACHE.set(site.slug, 0);
+    return undefined;
+  }
+}
+
 async function publishViaRestApi(
   article: GeneratedArticle,
   site: SiteCredential,
@@ -786,6 +850,8 @@ async function publishViaRestApi(
     "Content-Type": "application/json",
     Authorization: authHeader,
   };
+
+  const authorUserId = await resolveAndSyncAuthorUserId(site, baseUrl, wpHeaders);
 
   let categoryId = 1;
   try {
@@ -840,7 +906,7 @@ async function publishViaRestApi(
     }
   }
 
-  const postData = {
+  const postData: Record<string, unknown> = {
     title: article.title,
     content: finalHtml,
     excerpt: article.excerpt,
@@ -848,6 +914,7 @@ async function publishViaRestApi(
     status: "publish",
     categories: [categoryId],
     tags: tagIds,
+    ...(authorUserId ? { author: authorUserId } : {}),
     meta: {
       _yoast_wpseo_title: article.metaTitle,
       _yoast_wpseo_metadesc: article.metaDescription,
@@ -1393,6 +1460,32 @@ export async function publishArticlesRoutes(app: FastifyInstance) {
               }
             } catch {
               // IndexNow is best-effort, don't block publish
+            }
+          }
+          // Bing Webmaster SubmitUrlBatch — 하루 최대 10,000 URL까지 직접 제출
+          // IndexNow와 다른 경로로 제출해 누락 위험을 낮춤 (best-effort)
+          // BING_URL_SUBMISSION_ENABLED=false 로 전역 차단 가능 (sitemap 제출은 영향 없음)
+          if (isBingUrlSubmissionEnabled(result.postUrl)) {
+            try {
+              const submitResult = await submitBingUrls([result.postUrl]);
+              if (submitResult.submitted > 0) {
+                send({
+                  type: "progress",
+                  articleId: article.id,
+                  siteSlug: article.siteSlug,
+                  message: `Bing URL Submission 완료 (${submitResult.submitted}건)`,
+                });
+              }
+              if (submitResult.errors.length > 0) {
+                send({
+                  type: "progress",
+                  articleId: article.id,
+                  siteSlug: article.siteSlug,
+                  message: `Bing URL Submission 경고: ${submitResult.errors[0]}`,
+                });
+              }
+            } catch {
+              // Bing API는 best-effort — sitemap/IndexNow가 주 경로
             }
           }
           send({

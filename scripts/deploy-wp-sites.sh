@@ -1294,6 +1294,23 @@ add_action('wp_head', function() {
 
 add_filter('wpseo_canonical', '__return_false', PHP_INT_MAX);
 
+// Codex AEO 리뷰 (2026-04-21): Yoast 가 post_excerpt 어절 수를 wordCount 로 박는 버그.
+// 실제 post_content 기반 어절 수로 오버라이드 — Bing/AI가 본문 분량을 정확히 인식하게.
+add_filter('wpseo_schema_article', function($data, $context) {
+    if (!isset($context->post) || !is_object($context->post)) {
+        return $data;
+    }
+    $content = apply_filters('the_content', $context->post->post_content);
+    $plain = wp_strip_all_tags((string) $content);
+    if (preg_match_all('/[\p{L}\p{N}]+/u', $plain, $matches)) {
+        $count = count($matches[0]);
+        if ($count > 0) {
+            $data['wordCount'] = $count;
+        }
+    }
+    return $data;
+}, 20, 2);
+
 function ai_get_home_document_title() {
     $title = trim((string) get_bloginfo('name'));
     if ($title === '') {

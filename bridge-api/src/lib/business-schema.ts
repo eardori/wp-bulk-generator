@@ -83,17 +83,34 @@ function extractPriceRange(contentText: string): string | undefined {
   return low === high ? `KRW ${low.toLocaleString("en-US")}` : `KRW ${low.toLocaleString("en-US")}-${high.toLocaleString("en-US")}`;
 }
 
-function extractAggregateRating(contentText: string): { ratingValue: string; reviewCount?: number } | undefined {
-  const ratingMatch = contentText.match(/(\d(?:\.\d)?)\s*(?:점|\/\s*5)/);
-  if (!ratingMatch?.[1]) return undefined;
+// Codex AEO 리뷰 (2026-04-21) 반영: ratingValue 단독 또는 환각 숫자가 aggregateRating 으로 박히면
+// Bing 이 저품질로 판단. 같은 세그먼트에 별점+리뷰수가 함께 있고 합리적 범위일 때만 인정.
+function extractAggregateRating(
+  contentText: string
+): { ratingValue: string; reviewCount: number } | undefined {
+  const segments = contentText
+    .split(/[.。!?\n]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 4);
 
-  const reviewCountMatch = contentText.match(/(?:리뷰|후기)\s*(\d{1,4})\s*개/);
-  const reviewCount = reviewCountMatch?.[1] ? Number.parseInt(reviewCountMatch[1], 10) : undefined;
+  for (const seg of segments) {
+    const ratingMatch = seg.match(/(\d(?:\.\d)?)\s*(?:점|\/\s*5)/);
+    const reviewCountMatch = seg.match(
+      /(?:리뷰|후기)\s*(\d{1,5})\s*개|(\d{1,5})\s*개\s*(?:리뷰|후기)/
+    );
 
-  return {
-    ratingValue: ratingMatch[1],
-    ...(reviewCount ? { reviewCount } : {}),
-  };
+    if (!ratingMatch?.[1] || !reviewCountMatch) continue;
+
+    const ratingValue = Number.parseFloat(ratingMatch[1]);
+    const reviewCount = Number.parseInt(reviewCountMatch[1] ?? reviewCountMatch[2], 10);
+
+    if (!Number.isFinite(ratingValue) || ratingValue < 1 || ratingValue > 5) continue;
+    if (!Number.isFinite(reviewCount) || reviewCount < 5 || reviewCount > 99_999) continue;
+
+    return { ratingValue: ratingMatch[1], reviewCount };
+  }
+
+  return undefined;
 }
 
 function inferCuisine(contentText: string): string | undefined {
@@ -185,7 +202,9 @@ export function buildBusinessSchemaFromHtml(
     schema.aggregateRating = {
       "@type": "AggregateRating",
       ratingValue: aggregateRating.ratingValue,
-      ...(aggregateRating.reviewCount ? { reviewCount: aggregateRating.reviewCount } : {}),
+      reviewCount: aggregateRating.reviewCount,
+      bestRating: "5",
+      worstRating: "1",
     };
   }
 
