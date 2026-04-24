@@ -1340,12 +1340,14 @@ add_action('wp_head', function() {
 }, 1);
 
 // GEO: Organization Schema (모든 페이지)
+// 2026-04-23 Codex 지적 반영: home_url 이 http 로 떨어질 수 있어 set_url_scheme 으로 https 강제
 add_action('wp_head', function() {
+    $home_https = set_url_scheme(home_url('/'), 'https');
     $org = [
         '@context' => 'https://schema.org',
         '@type' => 'Organization',
         'name' => get_bloginfo('name'),
-        'url' => home_url('/'),
+        'url' => $home_https,
         'description' => get_bloginfo('description'),
     ];
     echo '<script type="application/ld+json">' . wp_json_encode($org, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>' . "\n";
@@ -1354,14 +1356,16 @@ add_action('wp_head', function() {
 // GEO: WebSite + SearchAction Schema (프론트 페이지)
 add_action('wp_head', function() {
     if (!is_front_page()) return;
+    $home_https = set_url_scheme(home_url('/'), 'https');
+    $search_https = set_url_scheme(home_url('/?s={search_term_string}'), 'https');
     $ws = [
         '@context' => 'https://schema.org',
         '@type' => 'WebSite',
         'name' => get_bloginfo('name'),
-        'url' => home_url('/'),
+        'url' => $home_https,
         'potentialAction' => [
             '@type' => 'SearchAction',
-            'target' => home_url('/?s={search_term_string}'),
+            'target' => $search_https,
             'query-input' => 'required name=search_term_string',
         ],
     ];
@@ -1372,8 +1376,9 @@ add_action('wp_head', function() {
 add_action('wp_head', function() {
     if (!is_singular('post')) return;
     $cats = get_the_category();
+    $home_https = set_url_scheme(home_url('/'), 'https');
     $items = [
-        ['@type' => 'ListItem', 'position' => 1, 'name' => get_bloginfo('name'), 'item' => home_url('/')],
+        ['@type' => 'ListItem', 'position' => 1, 'name' => get_bloginfo('name'), 'item' => $home_https],
     ];
     if (!empty($cats)) {
         $items[] = ['@type' => 'ListItem', 'position' => 2, 'name' => $cats[0]->name, 'item' => get_category_link($cats[0]->term_id)];
