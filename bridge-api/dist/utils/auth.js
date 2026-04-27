@@ -67,6 +67,7 @@ export function verifyApiKey(req, reply, done) {
                 : "";
             if (!isJwtRouteAllowed(pathname, route)) {
                 reply.code(403).send({ error: "Token route mismatch" });
+                done();
                 return;
             }
             req.bridgeUser = decoded;
@@ -74,10 +75,12 @@ export function verifyApiKey(req, reply, done) {
         }
         catch {
             reply.code(401).send({ error: "Invalid token" });
+            done();
             return;
         }
     }
     reply.code(401).send({ error: "Unauthorized" });
+    done();
 }
 export function signToken(payload, expiresIn = "15m") {
     return signJwtWithFallback(payload, expiresIn);

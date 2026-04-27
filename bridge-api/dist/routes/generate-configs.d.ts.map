@@ -1,1 +1,1 @@
-{"version":3,"file":"generate-configs.d.ts","sourceRoot":"","sources":["../../src/routes/generate-configs.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,SAAS,CAAC;AAiO/C,wBAAsB,qBAAqB,CAAC,GAAG,EAAE,eAAe,iBA+I/D"}
+{"version":3,"file":"generate-configs.d.ts","sourceRoot":"","sources":["../../src/routes/generate-configs.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,SAAS,CAAC;AA2O/C,wBAAsB,qBAAqB,CAAC,GAAG,EAAE,eAAe,iBA+I/D"}

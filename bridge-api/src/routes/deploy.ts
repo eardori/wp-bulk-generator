@@ -19,6 +19,7 @@ import {
   getPrimaryServerTarget,
   getSecondaryServerTarget,
   isRemoteTarget,
+  resolveSiteTarget,
   type ServerTarget,
 } from "../lib/server-targets.js";
 import { execSsh, scpToTarget, shellQuote, spawnSsh } from "../lib/ssh.js";
@@ -1262,5 +1263,97 @@ export async function deployRoutes(app: FastifyInstance) {
     }
 
     return result;
+  });
+
+  // 단일 사이트 robots.txt 의 'Sitemap: http://' 항목을 'https://' 로 패치.
+  // chowlog.xyz 처럼 http→https 전환 후 robots.txt 만 회귀하지 않은 사이트 1회성 보정용.
+  // body: { slug: string }
+  app.post("/deploy/fix-robots-https", async (req, reply) => {
+    type Body = { slug?: string };
+    const body = (req.body || {}) as Body;
+    const slug = String(body.slug || "").trim();
+    if (!slug) {
+      reply.code(400);
+      return { error: "slug is required" };
+    }
+
+    let credentials: StoredCredential[];
+    try {
+      credentials = JSON.parse(readFileSync(CREDS_PATH, "utf-8")) as StoredCredential[];
+    } catch (e) {
+      reply.code(500);
+      return {
+        error: `failed to load credentials (${CREDS_PATH}): ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
+    }
+
+    const site = credentials.find((c) => (c.slug || c.site_slug) === slug);
+    if (!site) {
+      reply.code(404);
+      return { error: `site not found: ${slug}` };
+    }
+
+    const target = resolveSiteTarget({
+      slug: site.slug || site.site_slug || slug,
+      site_dir: site.site_dir,
+      server_id: site.server_id,
+      server_host: site.server_host,
+      server_user: site.server_user,
+      server_key_path: site.server_key_path,
+      server_site_root: site.server_site_root,
+      server_repo_root: site.server_repo_root,
+    });
+
+    const siteDir = site.site_dir || `${target.siteRoot}/${slug}`;
+    const robotsPath = `${siteDir}/robots.txt`;
+
+    // sed 로 'Sitemap: http://' → 'https://' 만 치환. 다른 줄은 보존.
+    // 치환 후 결과 검증을 위해 Sitemap 줄을 grep 으로 출력.
+    const patchCmd = `sudo sed -i 's|^Sitemap: http://|Sitemap: https://|g' ${shellQuote(
+      robotsPath
+    )}`;
+    const verifyCmd = `sudo grep -i '^Sitemap:' ${shellQuote(robotsPath)} || true`;
+
+    try {
+      if (isRemoteTarget(target)) {
+        execSsh(target, patchCmd, 30000);
+        const verify = execSsh(target, verifyCmd, 15000);
+        return {
+          slug,
+          target: target.id,
+          remote: true,
+          robotsPath,
+          sitemapLines: verify.split("\n").filter(Boolean),
+          ok: true,
+        };
+      }
+      execSync(patchCmd, { stdio: "pipe", timeout: 30000 });
+      const verify = execSync(verifyCmd, {
+        encoding: "utf8",
+        timeout: 15000,
+      })
+        .toString()
+        .trim();
+      return {
+        slug,
+        target: target.id,
+        remote: false,
+        robotsPath,
+        sitemapLines: verify.split("\n").filter(Boolean),
+        ok: true,
+      };
+    } catch (e) {
+      reply.code(500);
+      return {
+        slug,
+        target: target.id,
+        remote: isRemoteTarget(target),
+        robotsPath,
+        ok: false,
+        error: e instanceof Error ? e.message.slice(0, 400) : String(e).slice(0, 400),
+      };
+    }
   });
 }

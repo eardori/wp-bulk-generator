@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { execFileSync, execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -7,7 +7,7 @@ import { setupSSE } from "../utils/sse.js";
 import { sanitizeGeneratedArticle } from "../lib/article-sanitizer.js";
 import { updateDashboardSiteCache } from "../lib/dashboard-cache.js";
 import { buildBusinessSchemaFromHtml, stripReviewReferenceMarkers } from "../lib/business-schema.js";
-import { isBingWebmasterSyncEnabled, submitBingUrls, } from "../lib/bing-webmaster.js";
+import { isBingUrlSubmissionEnabled, isBingWebmasterSyncEnabled, submitBingUrls, syncBingSite, } from "../lib/bing-webmaster.js";
 import { isIndexNowEnabled, submitIndexNow, getIndexNowApiKey, } from "../lib/indexnow.js";
 import { getSiteDirForTarget, isRemoteTarget, resolveSiteTarget, } from "../lib/server-targets.js";
 import { execSsh, scpToTarget, shellQuote } from "../lib/ssh.js";
@@ -75,14 +75,12 @@ function buildDashboardPostEntry(article, result) {
 }
 // ── Image helpers ────────────────────────────────────────────────────────────
 function downloadImageWithCurl(url) {
-    const escapedUrl = url.replace(/'/g, "'\\''");
-    const cmd = [
-        "curl", "-s", "-L", "--max-time", "20",
+    const result = execFileSync("curl", [
+        "-s", "-L", "--max-time", "20",
         "-H", "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
         "-H", "Referer: https://smartstore.naver.com/",
-        `'${escapedUrl}'`,
-    ].join(" ");
-    const result = execSync(cmd, { timeout: 25000, maxBuffer: 20 * 1024 * 1024, encoding: "buffer" });
+        url,
+    ], { timeout: 25000, maxBuffer: 20 * 1024 * 1024 });
     if (!result || result.length < 100)
         throw new Error("Empty image response");
     return result;
@@ -265,26 +263,11 @@ function buildFinalHtml(article, site, replacedHtml) {
     const dateStr = `${now.getFullYear()}년 ${now.getMonth() + 1}월 ${now.getDate()}일`;
     const isoDate = now.toISOString().split('T')[0];
     finalHtml += `\n<p class="last-updated" style="color:#888;font-size:0.85em;margin-top:2em;text-align:right;">마지막 업데이트: <time datetime="${isoDate}">${dateStr}</time></p>`;
-    // ── FAQPage JSON-LD ──
-    if (article.faqSchema && article.faqSchema.length > 0) {
-        const faqJsonLd = {
-            "@context": "https://schema.org",
-            "@type": "FAQPage",
-            "mainEntity": article.faqSchema.map((faq) => ({
-                "@type": "Question",
-                "name": faq.question,
-                "acceptedAnswer": {
-                    "@type": "Answer",
-                    "text": faq.answer,
-                },
-            })),
-        };
-        finalHtml += `\n<script type="application/ld+json">${JSON.stringify(faqJsonLd)}</script>`;
-    }
-    // ── Article JSON-LD (with author sameAs) ──
+    // ── 통합 JSON-LD @graph 구성 (Bing 파서 호환성 향상) ──
     const authorUrl = `${baseUrl}/author/${(site.admin_user || "admin").toLowerCase()}/`;
-    const articleJsonLd = {
-        "@context": "https://schema.org",
+    const graphItems = [];
+    // Article schema
+    graphItems.push({
         "@type": "Article",
         "headline": article.title,
         "description": article.metaDescription || article.excerpt,
@@ -314,11 +297,23 @@ function buildFinalHtml(article, site, replacedHtml) {
         },
         "url": canonicalUrl,
         ...(article.tags?.length > 0 ? { "keywords": article.tags.join(", ") } : {}),
-    };
-    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(articleJsonLd)}</script>`;
-    // ── BreadcrumbList JSON-LD ──
-    const breadcrumbJsonLd = {
-        "@context": "https://schema.org",
+    });
+    // FAQPage schema
+    if (article.faqSchema && article.faqSchema.length > 0) {
+        graphItems.push({
+            "@type": "FAQPage",
+            "mainEntity": article.faqSchema.map((faq) => ({
+                "@type": "Question",
+                "name": faq.question,
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": faq.answer,
+                },
+            })),
+        });
+    }
+    // BreadcrumbList schema
+    graphItems.push({
         "@type": "BreadcrumbList",
         "itemListElement": [
             {
@@ -340,14 +335,14 @@ function buildFinalHtml(article, site, replacedHtml) {
                 "item": canonicalUrl,
             },
         ],
-    };
-    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(breadcrumbJsonLd)}</script>`;
-    // ── HowTo JSON-LD (auto-extract from <ol> lists) ──
+    });
+    // HowTo schema (auto-extract from <ol> lists)
     const howToJsonLd = buildHowToSchema(cleanedHtml, article.title);
     if (howToJsonLd) {
-        finalHtml += `\n<script type="application/ld+json">${JSON.stringify(howToJsonLd)}</script>`;
+        const { "@context": _ctx, ...howToWithoutContext } = howToJsonLd;
+        graphItems.push(howToWithoutContext);
     }
-    // ── Business / Product Schema ──
+    // Business / Product schema
     const businessJsonLd = buildBusinessSchemaFromHtml({
         title: article.title,
         excerpt: article.metaDescription || article.excerpt,
@@ -356,14 +351,22 @@ function buildFinalHtml(article, site, replacedHtml) {
         sourceName: article.sourceTitle,
     });
     if (businessJsonLd) {
-        finalHtml += `\n<script type="application/ld+json">${JSON.stringify(businessJsonLd)}</script>`;
+        const { "@context": _ctx, ...bizWithoutContext } = businessJsonLd;
+        graphItems.push(bizWithoutContext);
     }
     else {
         const productReviewJsonLd = buildProductReviewSchema(article, site);
         if (productReviewJsonLd) {
-            finalHtml += `\n<script type="application/ld+json">${JSON.stringify(productReviewJsonLd)}</script>`;
+            const { "@context": _ctx, ...prodWithoutContext } = productReviewJsonLd;
+            graphItems.push(prodWithoutContext);
         }
     }
+    // 단일 @graph JSON-LD 블록으로 출력
+    const unifiedJsonLd = {
+        "@context": "https://schema.org",
+        "@graph": graphItems,
+    };
+    finalHtml += `\n<script type="application/ld+json">${JSON.stringify(unifiedJsonLd)}</script>`;
     return finalHtml;
 }
 /**
@@ -594,6 +597,67 @@ function buildRelatedPostsHtml(relatedPosts) {
 <ul>${links}</ul>
 </div>`;
 }
+// Codex AEO 리뷰 (2026-04-21) 반영: 모든 글이 author=admin 으로 찍혀 페르소나와 identity 불일치.
+// publish 시 app_pass 소유 user(=보통 admin) 의 display_name/description 을 persona 로 동기화하고
+// post.author 를 그 user id 로 명시. 사이트당 1회 조회 후 캐시.
+const SITE_AUTHOR_USER_ID_CACHE = new Map();
+async function resolveAndSyncAuthorUserId(site, baseUrl, wpHeaders) {
+    const cached = SITE_AUTHOR_USER_ID_CACHE.get(site.slug);
+    if (cached !== undefined)
+        return cached > 0 ? cached : undefined;
+    try {
+        const meRes = await fetch(`${baseUrl}/wp-json/wp/v2/users/me?context=edit`, {
+            headers: wpHeaders,
+            signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
+        });
+        if (!meRes.ok) {
+            SITE_AUTHOR_USER_ID_CACHE.set(site.slug, 0);
+            return undefined;
+        }
+        const me = await meRes.json();
+        const userId = parsePositiveInt(me?.id);
+        if (!userId) {
+            SITE_AUTHOR_USER_ID_CACHE.set(site.slug, 0);
+            return undefined;
+        }
+        const persona = site.persona;
+        if (persona?.name) {
+            const currentName = String(me?.name || "").trim();
+            const currentDesc = String(me?.description || "").trim();
+            const currentSlug = String(me?.slug || "").trim();
+            const desiredName = persona.name.trim();
+            const desiredDesc = (persona.bio || "").trim();
+            // Codex AEO 리뷰 (2026-04-22): author URL 이 /author/admin/ 로 남아 페르소나 identity 와 불일치.
+            // persona.slug 명시되면 그 slug, 아니면 site.slug (로마자 안전) 로 user_nicename 동기화.
+            const rawSlug = (persona.slug || site.slug || "").toLowerCase().trim();
+            const desiredSlug = rawSlug.replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+            const nameNeedsSync = currentName !== desiredName;
+            const descNeedsSync = !!desiredDesc && currentDesc !== desiredDesc;
+            const slugNeedsSync = !!desiredSlug && currentSlug !== desiredSlug;
+            if (nameNeedsSync || descNeedsSync || slugNeedsSync) {
+                await fetch(`${baseUrl}/wp-json/wp/v2/users/${userId}`, {
+                    method: "POST",
+                    headers: wpHeaders,
+                    body: JSON.stringify({
+                        name: desiredName,
+                        first_name: desiredName,
+                        ...(desiredDesc ? { description: desiredDesc } : {}),
+                        ...(desiredSlug ? { slug: desiredSlug } : {}),
+                    }),
+                    signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
+                }).catch(() => {
+                    /* best effort */
+                });
+            }
+        }
+        SITE_AUTHOR_USER_ID_CACHE.set(site.slug, userId);
+        return userId;
+    }
+    catch {
+        SITE_AUTHOR_USER_ID_CACHE.set(site.slug, 0);
+        return undefined;
+    }
+}
 async function publishViaRestApi(article, site, finalHtml) {
     const baseUrl = getSiteBaseUrl(site);
     const authHeader = "Basic " +
@@ -602,6 +666,7 @@ async function publishViaRestApi(article, site, finalHtml) {
         "Content-Type": "application/json",
         Authorization: authHeader,
     };
+    const authorUserId = await resolveAndSyncAuthorUserId(site, baseUrl, wpHeaders);
     let categoryId = 1;
     try {
         const catRes = await fetch(`${baseUrl}/wp-json/wp/v2/categories?search=${encodeURIComponent(article.category)}`, { headers: wpHeaders, signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS) });
@@ -659,6 +724,7 @@ async function publishViaRestApi(article, site, finalHtml) {
         status: "publish",
         categories: [categoryId],
         tags: tagIds,
+        ...(authorUserId ? { author: authorUserId } : {}),
         meta: {
             _yoast_wpseo_title: article.metaTitle,
             _yoast_wpseo_metadesc: article.metaDescription,
@@ -1012,9 +1078,20 @@ async function deployIndexNowKeyFile(site) {
                 rmSync(tempDir, { recursive: true, force: true });
             }
         }
+        // 키 파일 접근성 검증
+        const keyUrl = `https://${site.domain}/${keyFileName}`;
+        try {
+            const resp = await fetch(keyUrl, { signal: AbortSignal.timeout(10_000) });
+            if (!resp.ok) {
+                console.warn(`[IndexNow] 키 파일 검증 실패: ${keyUrl} → HTTP ${resp.status}`);
+            }
+        }
+        catch (verifyErr) {
+            console.warn(`[IndexNow] 키 파일 접근 불가: ${keyUrl} — ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`);
+        }
     }
-    catch {
-        // best-effort
+    catch (err) {
+        console.warn(`[IndexNow] 키 파일 배포 실패 (${site.domain}): ${err instanceof Error ? err.message : String(err)}`);
     }
 }
 // ── Route ────────────────────────────────────────────────────────────────────
@@ -1065,22 +1142,23 @@ export async function publishArticlesRoutes(app) {
                         };
                     });
                     if (isBingWebmasterSyncEnabled()) {
-                        const bingResult = await submitBingUrls([result.postUrl]);
-                        if (bingResult.errors.length > 0) {
-                            send({
-                                type: "progress",
-                                articleId: article.id,
-                                siteSlug: article.siteSlug,
-                                message: `Bing URL 제출 경고: ${bingResult.errors[0]}`,
-                            });
+                        // 서브도메인 sitemap을 루트 도메인 siteUrl로 Bing에 제출
+                        try {
+                            const postHost = new URL(result.postUrl).hostname;
+                            const domainParts = postHost.split(".");
+                            const rootDomain = domainParts.length > 2
+                                ? domainParts.slice(-2).join(".")
+                                : postHost;
+                            const bingSiteUrl = `https://${rootDomain}`;
+                            const postSiteUrl = `https://${postHost}`;
+                            // 루트 도메인 등록 + 서브도메인 sitemap 제출
+                            await syncBingSite(bingSiteUrl);
+                            if (postSiteUrl !== bingSiteUrl) {
+                                await syncBingSite(postSiteUrl).catch(() => { });
+                            }
                         }
-                        else {
-                            send({
-                                type: "progress",
-                                articleId: article.id,
-                                siteSlug: article.siteSlug,
-                                message: `Bing URL 제출 완료`,
-                            });
+                        catch {
+                            // IndexNow가 주요 색인 경로이므로 Bing API 실패는 무시
                         }
                     }
                     // IndexNow — 즉시 색인 요청 (Bing, Yandex, Naver 등)
@@ -1107,6 +1185,33 @@ export async function publishArticlesRoutes(app) {
                         }
                         catch {
                             // IndexNow is best-effort, don't block publish
+                        }
+                    }
+                    // Bing Webmaster SubmitUrlBatch — 하루 최대 10,000 URL까지 직접 제출
+                    // IndexNow와 다른 경로로 제출해 누락 위험을 낮춤 (best-effort)
+                    // BING_URL_SUBMISSION_ENABLED=false 로 전역 차단 가능 (sitemap 제출은 영향 없음)
+                    if (isBingUrlSubmissionEnabled(result.postUrl)) {
+                        try {
+                            const submitResult = await submitBingUrls([result.postUrl]);
+                            if (submitResult.submitted > 0) {
+                                send({
+                                    type: "progress",
+                                    articleId: article.id,
+                                    siteSlug: article.siteSlug,
+                                    message: `Bing URL Submission 완료 (${submitResult.submitted}건)`,
+                                });
+                            }
+                            if (submitResult.errors.length > 0) {
+                                send({
+                                    type: "progress",
+                                    articleId: article.id,
+                                    siteSlug: article.siteSlug,
+                                    message: `Bing URL Submission 경고: ${submitResult.errors[0]}`,
+                                });
+                            }
+                        }
+                        catch {
+                            // Bing API는 best-effort — sitemap/IndexNow가 주 경로
                         }
                     }
                     send({

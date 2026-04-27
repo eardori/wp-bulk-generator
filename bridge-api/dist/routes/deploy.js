@@ -5,8 +5,10 @@ import { dirname, join } from "path";
 import { setupSSE } from "../utils/sse.js";
 import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
 import { seedDashboardSiteCaches } from "../lib/dashboard-cache.js";
-import { isBingWebmasterSyncEnabled, syncBingSite, } from "../lib/bing-webmaster.js";
-import { getDefaultDeployTarget, getPrimaryServerTarget, isRemoteTarget, } from "../lib/server-targets.js";
+import { isBingUrlSubmissionEnabled, isBingWebmasterSyncEnabled, submitBingUrls, syncBingSite, } from "../lib/bing-webmaster.js";
+import { isIndexNowEnabled, submitIndexNow } from "../lib/indexnow.js";
+import { syncWpAuthorFromPersona } from "../lib/author-sync.js";
+import { getDefaultDeployTarget, getPrimaryServerTarget, getSecondaryServerTarget, isRemoteTarget, resolveSiteTarget, } from "../lib/server-targets.js";
 import { execSsh, scpToTarget, shellQuote, spawnSsh } from "../lib/ssh.js";
 const CREDS_PATH = process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json";
 const CONFIG_PATH = process.env.CONFIG_PATH || "/root/wp-sites-config.json";
@@ -402,6 +404,230 @@ function appendChunkLines(pending, data, onLine) {
     return remainder;
 }
 export async function deployRoutes(app) {
+    // proxy sync만 단독 실행 (SSL 인증서 발급 + Nginx 설정 업데이트)
+    app.post("/deploy/proxy-sync", async (req, reply) => {
+        const { send, close } = setupSSE(reply);
+        try {
+            send({ type: "log", message: "--- primary proxy sync 시작 ---" });
+            const output = runSecondaryProxySync();
+            for (const line of output.split(/\r?\n/).filter(Boolean)) {
+                send({ type: "log", message: line });
+            }
+            send({ type: "done", message: "proxy sync 완료" });
+        }
+        catch (error) {
+            const stdout = error && typeof error === "object" && "stdout" in error && Buffer.isBuffer(error.stdout)
+                ? error.stdout.toString("utf8") : "";
+            const stderr = error && typeof error === "object" && "stderr" in error && Buffer.isBuffer(error.stderr)
+                ? error.stderr.toString("utf8") : "";
+            for (const line of `${stdout}\n${stderr}`.split(/\r?\n/).filter(Boolean)) {
+                send({ type: "log", message: line });
+            }
+            send({ type: "error", message: "proxy sync 실패" });
+        }
+        finally {
+            close();
+        }
+    });
+    // 기존 사이트의 robots.txt http→https 수정 (모든 서버 대상)
+    app.post("/deploy/refresh-static-files", async (req, reply) => {
+        const { send, close } = setupSSE(reply);
+        try {
+            // Primary + Secondary 서버 모두 처리
+            const targets = [getPrimaryServerTarget()];
+            const secondary = getSecondaryServerTarget();
+            if (secondary)
+                targets.push(secondary);
+            let totalUpdated = 0;
+            for (const target of targets) {
+                const siteRoot = target.siteRoot;
+                // robots.txt 내 http:// → https:// 일괄 치환
+                const cmd = `find ${siteRoot} -maxdepth 2 -name robots.txt -exec grep -l 'http://' {} \\; 2>/dev/null | while read f; do sed -i 's|http://|https://|g' "$f" && echo "✓ $f"; done; echo "DONE"`;
+                try {
+                    let output;
+                    if (isRemoteTarget(target)) {
+                        output = execSsh(target, cmd, 30000);
+                    }
+                    else {
+                        output = execSync(cmd, { encoding: "utf8", timeout: 30000 }).trim();
+                    }
+                    for (const line of output.split(/\r?\n/).filter(Boolean)) {
+                        if (line === "DONE")
+                            continue;
+                        send({ type: "log", message: `[${target.id}] ${line}` });
+                        totalUpdated++;
+                    }
+                }
+                catch (err) {
+                    send({ type: "log", message: `[${target.id}] ⚠ ${err instanceof Error ? err.message : String(err)}` });
+                }
+            }
+            send({ type: "done", message: `완료: ${totalUpdated}개 robots.txt 갱신` });
+        }
+        catch (error) {
+            send({ type: "error", message: error instanceof Error ? error.message : String(error) });
+        }
+        finally {
+            close();
+        }
+    });
+    // 모든 myground 사이트의 sitemap을 Bing에 일괄 제출
+    app.post("/deploy/submit-sitemaps", async (req, reply) => {
+        const { send, close } = setupSSE(reply);
+        try {
+            const sites = readExistingSites();
+            const mygroundSites = sites.filter((s) => s.domain && (s.domain.includes("myground.website")));
+            send({ type: "log", message: `myground 사이트 ${mygroundSites.length}개 발견` });
+            let successCount = 0;
+            for (const site of mygroundSites) {
+                const domain = site.domain;
+                try {
+                    const siteUrl = `https://${domain}`;
+                    const result = await syncBingSite(siteUrl);
+                    const status = result.feedSubmitted ? "✓ sitemap 제출" : "⚠ sitemap 실패";
+                    send({ type: "log", message: `  ${status}: ${domain}` });
+                    if (result.errors.length > 0) {
+                        for (const err of result.errors) {
+                            send({ type: "log", message: `    ${err}` });
+                        }
+                    }
+                    if (result.feedSubmitted)
+                        successCount++;
+                }
+                catch (err) {
+                    send({ type: "log", message: `  ✗ ${domain}: ${err instanceof Error ? err.message : String(err)}` });
+                }
+            }
+            send({ type: "done", message: `완료: ${successCount}/${mygroundSites.length}개 sitemap 제출` });
+        }
+        catch (error) {
+            send({ type: "error", message: error instanceof Error ? error.message : String(error) });
+        }
+        finally {
+            close();
+        }
+    });
+    // 기존 발행된 모든 WP 글을 Bing SubmitUrlBatch + IndexNow로 일괄 재제출
+    // 요청 body (모두 optional):
+    //   { domainFilter?: string, slugs?: string[], perSiteLimit?: number }
+    app.post("/deploy/resubmit-bing-urls", async (req, reply) => {
+        const { send, close } = setupSSE(reply);
+        const body = (req.body || {});
+        const perSiteLimit = Math.min(Math.max(body.perSiteLimit || 200, 1), 1000);
+        const slugFilter = body.slugs?.length
+            ? new Set(body.slugs.map((s) => s.toLowerCase()))
+            : null;
+        try {
+            const sites = readExistingSites();
+            let targets = sites.filter((s) => s.domain && !isExcludedSiteSlug(normalizeSlug(s.site_slug ?? s.slug)));
+            if (body.domainFilter) {
+                const needle = body.domainFilter.toLowerCase();
+                targets = targets.filter((s) => (s.domain || "").toLowerCase().includes(needle));
+            }
+            if (slugFilter) {
+                targets = targets.filter((s) => slugFilter.has(normalizeSlug(s.site_slug ?? s.slug)));
+            }
+            send({ type: "log", message: `대상 사이트 ${targets.length}개` });
+            if (!isBingWebmasterSyncEnabled() && !isIndexNowEnabled()) {
+                send({ type: "error", message: "BING_WEBMASTER_API_KEY / INDEXNOW_API_KEY 모두 미설정 — 아무것도 제출할 수 없습니다." });
+                return;
+            }
+            let totalUrls = 0;
+            let bingSubmitted = 0;
+            let bingErrors = 0;
+            let indexNowSubmitted = 0;
+            let indexNowErrors = 0;
+            for (const site of targets) {
+                const domain = site.domain;
+                const host = domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+                const base = `https://${host}`;
+                // WP REST API 로 발행된 글 URL 수집 (페이지네이션)
+                const urls = [];
+                try {
+                    let page = 1;
+                    while (urls.length < perSiteLimit) {
+                        const perPage = Math.min(100, perSiteLimit - urls.length);
+                        const endpoint = `${base}/wp-json/wp/v2/posts?status=publish&per_page=${perPage}&page=${page}&_fields=link`;
+                        const res = await fetch(endpoint, {
+                            signal: AbortSignal.timeout(15000),
+                            headers: { "User-Agent": "wp-bulk-generator/resubmit" },
+                        });
+                        if (!res.ok) {
+                            if (res.status === 400 || res.status === 404)
+                                break; // 페이지 끝
+                            throw new Error(`HTTP ${res.status} ${await res.text().then((t) => t.slice(0, 120)).catch(() => "")}`);
+                        }
+                        const items = (await res.json());
+                        if (!Array.isArray(items) || items.length === 0)
+                            break;
+                        for (const it of items) {
+                            if (it.link && typeof it.link === "string") {
+                                // 내부 http→https 방어
+                                urls.push(it.link.replace(/^http:\/\//, "https://"));
+                            }
+                        }
+                        if (items.length < perPage)
+                            break;
+                        page += 1;
+                    }
+                }
+                catch (err) {
+                    send({ type: "log", message: `  ✗ ${domain} URL 수집 실패: ${err instanceof Error ? err.message : String(err)}` });
+                    continue;
+                }
+                if (urls.length === 0) {
+                    send({ type: "log", message: `  - ${domain}: 발행 글 없음` });
+                    continue;
+                }
+                totalUrls += urls.length;
+                send({ type: "log", message: `  • ${domain}: ${urls.length}개 URL 수집` });
+                // Bing SubmitUrlBatch — BING_URL_SUBMISSION_ENABLED=false 면 건너뜀
+                if (isBingUrlSubmissionEnabled(base)) {
+                    try {
+                        const result = await submitBingUrls(urls, base);
+                        bingSubmitted += result.submitted;
+                        if (result.errors.length > 0) {
+                            bingErrors += result.errors.length;
+                            send({ type: "log", message: `    Bing 경고: ${result.errors[0]}` });
+                        }
+                        send({ type: "log", message: `    ↳ Bing: ${result.submitted}건 제출 (batch ${result.batches})` });
+                    }
+                    catch (err) {
+                        bingErrors += 1;
+                        send({ type: "log", message: `    ✗ Bing 실패: ${err instanceof Error ? err.message : String(err)}` });
+                    }
+                }
+                // IndexNow (호스트별 일괄)
+                if (isIndexNowEnabled()) {
+                    try {
+                        const result = await submitIndexNow(urls, host);
+                        if (result.success) {
+                            indexNowSubmitted += result.submitted;
+                            send({ type: "log", message: `    ↳ IndexNow: ${result.submitted}건 (${result.statusCode})` });
+                        }
+                        else if (result.error) {
+                            indexNowErrors += 1;
+                            send({ type: "log", message: `    ✗ IndexNow: ${result.error}` });
+                        }
+                    }
+                    catch (err) {
+                        indexNowErrors += 1;
+                        send({ type: "log", message: `    ✗ IndexNow 실패: ${err instanceof Error ? err.message : String(err)}` });
+                    }
+                }
+            }
+            send({
+                type: "done",
+                message: `완료 — 수집 ${totalUrls}건 / Bing 제출 ${bingSubmitted} (오류 ${bingErrors}) / IndexNow 제출 ${indexNowSubmitted} (오류 ${indexNowErrors})`,
+            });
+        }
+        catch (error) {
+            send({ type: "error", message: error instanceof Error ? error.message : String(error) });
+        }
+        finally {
+            close();
+        }
+    });
     app.post("/deploy", async (req, reply) => {
         const { configs } = req.body;
         if (!configs?.length) {
@@ -654,6 +880,183 @@ export async function deployRoutes(app) {
         finally {
             deployCleanup();
             close();
+        }
+    });
+    // 단일 사이트의 AEO 관련 설정을 즉시 재적용.
+    // (1) credentials 에 persona.slug 영구 저장
+    // (2) MU-plugin(ai-seo-optimize.php) 재설치 — Yoast wordCount 필터 등 최신 상태로
+    // (3) WP object cache flush
+    // (4) WP user 의 display_name/description/slug 를 persona 로 동기화
+    // body: { slug: string, personaSlug?: string }
+    app.post("/deploy/refresh-aeo", async (req, reply) => {
+        const body = (req.body || {});
+        const slug = String(body.slug || "").trim();
+        const rawPersonaSlug = body.personaSlug ? String(body.personaSlug).trim() : "";
+        if (!slug) {
+            reply.code(400);
+            return { error: "slug is required" };
+        }
+        let credentials;
+        try {
+            credentials = JSON.parse(readFileSync(CREDS_PATH, "utf-8"));
+        }
+        catch (e) {
+            reply.code(500);
+            return {
+                error: `failed to load credentials (${CREDS_PATH}): ${e instanceof Error ? e.message : String(e)}`,
+            };
+        }
+        const siteIndex = credentials.findIndex((c) => (c.slug || c.site_slug) === slug);
+        if (siteIndex < 0) {
+            reply.code(404);
+            return { error: `site not found: ${slug}` };
+        }
+        const site = credentials[siteIndex];
+        const result = { slug };
+        // 1. credentials 에 personaSlug 영구 저장
+        if (rawPersonaSlug) {
+            const sanitized = rawPersonaSlug
+                .toLowerCase()
+                .replace(/[^a-z0-9-]+/g, "-")
+                .replace(/^-+|-+$/g, "");
+            if (sanitized) {
+                const existingPersona = site.persona || { name: "" };
+                if (existingPersona.slug !== sanitized) {
+                    existingPersona.slug = sanitized;
+                    site.persona = existingPersona;
+                    credentials[siteIndex] = site;
+                    try {
+                        writeFileSync(CREDS_PATH, JSON.stringify(credentials, null, 2));
+                        result.credentialsUpdated = { personaSlug: sanitized };
+                    }
+                    catch (e) {
+                        result.credentialsUpdateError =
+                            e instanceof Error ? e.message : String(e);
+                    }
+                }
+                else {
+                    result.credentialsUpdated = { personaSlug: sanitized, noChange: true };
+                }
+            }
+        }
+        // 2. MU-plugin 재설치 (sudo bash)
+        const siteDir = `/var/www/${slug}`;
+        try {
+            execSync(`sudo -n bash -c "cd /home/ubuntu/wp-bulk-generator && source scripts/deploy-wp-sites.sh && ensure_seo_mu_plugin '${siteDir}'"`, { stdio: "pipe", timeout: 30000 });
+            result.muPluginUpdated = true;
+        }
+        catch (e) {
+            result.muPluginError =
+                e instanceof Error ? e.message.slice(0, 400) : String(e).slice(0, 400);
+        }
+        // 3. WP object cache flush
+        try {
+            execSync(`sudo -n wp cache flush --path="${siteDir}" --allow-root`, { stdio: "pipe", timeout: 15000 });
+            result.cacheFlushed = true;
+        }
+        catch (e) {
+            result.cacheFlushError =
+                e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200);
+        }
+        // 4. WP user 동기화 (display_name/description/slug → persona)
+        const domainRaw = site.domain || "";
+        const host = domainRaw.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+        const adminUser = site.admin_user || "";
+        const appPass = site.app_pass || "";
+        if (host && adminUser && appPass) {
+            const baseUrl = `https://${host}`;
+            const authHeader = "Basic " + Buffer.from(`${adminUser}:${appPass}`).toString("base64");
+            const syncResult = await syncWpAuthorFromPersona({ slug, persona: site.persona }, baseUrl, { "Content-Type": "application/json", Authorization: authHeader });
+            result.authorSync = syncResult;
+        }
+        else {
+            result.authorSync = {
+                updated: false,
+                error: "missing domain/admin_user/app_pass in credentials",
+            };
+        }
+        return result;
+    });
+    // 단일 사이트 robots.txt 의 'Sitemap: http://' 항목을 'https://' 로 패치.
+    // chowlog.xyz 처럼 http→https 전환 후 robots.txt 만 회귀하지 않은 사이트 1회성 보정용.
+    // body: { slug: string }
+    app.post("/deploy/fix-robots-https", async (req, reply) => {
+        const body = (req.body || {});
+        const slug = String(body.slug || "").trim();
+        if (!slug) {
+            reply.code(400);
+            return { error: "slug is required" };
+        }
+        let credentials;
+        try {
+            credentials = JSON.parse(readFileSync(CREDS_PATH, "utf-8"));
+        }
+        catch (e) {
+            reply.code(500);
+            return {
+                error: `failed to load credentials (${CREDS_PATH}): ${e instanceof Error ? e.message : String(e)}`,
+            };
+        }
+        const site = credentials.find((c) => (c.slug || c.site_slug) === slug);
+        if (!site) {
+            reply.code(404);
+            return { error: `site not found: ${slug}` };
+        }
+        const target = resolveSiteTarget({
+            slug: site.slug || site.site_slug || slug,
+            site_dir: site.site_dir,
+            server_id: site.server_id,
+            server_host: site.server_host,
+            server_user: site.server_user,
+            server_key_path: site.server_key_path,
+            server_site_root: site.server_site_root,
+            server_repo_root: site.server_repo_root,
+        });
+        const siteDir = site.site_dir || `${target.siteRoot}/${slug}`;
+        const robotsPath = `${siteDir}/robots.txt`;
+        // sed 로 'Sitemap: http://' → 'https://' 만 치환. 다른 줄은 보존.
+        // 치환 후 결과 검증을 위해 Sitemap 줄을 grep 으로 출력.
+        const patchCmd = `sudo sed -i 's|^Sitemap: http://|Sitemap: https://|g' ${shellQuote(robotsPath)}`;
+        const verifyCmd = `sudo grep -i '^Sitemap:' ${shellQuote(robotsPath)} || true`;
+        try {
+            if (isRemoteTarget(target)) {
+                execSsh(target, patchCmd, 30000);
+                const verify = execSsh(target, verifyCmd, 15000);
+                return {
+                    slug,
+                    target: target.id,
+                    remote: true,
+                    robotsPath,
+                    sitemapLines: verify.split("\n").filter(Boolean),
+                    ok: true,
+                };
+            }
+            execSync(patchCmd, { stdio: "pipe", timeout: 30000 });
+            const verify = execSync(verifyCmd, {
+                encoding: "utf8",
+                timeout: 15000,
+            })
+                .toString()
+                .trim();
+            return {
+                slug,
+                target: target.id,
+                remote: false,
+                robotsPath,
+                sitemapLines: verify.split("\n").filter(Boolean),
+                ok: true,
+            };
+        }
+        catch (e) {
+            reply.code(500);
+            return {
+                slug,
+                target: target.id,
+                remote: isRemoteTarget(target),
+                robotsPath,
+                ok: false,
+                error: e instanceof Error ? e.message.slice(0, 400) : String(e).slice(0, 400),
+            };
         }
     });
 }
