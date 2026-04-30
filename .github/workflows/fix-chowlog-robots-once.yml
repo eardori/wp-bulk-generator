@@ -1,0 +1,35 @@
+name: One-shot — Fix chowlog robots.txt http→https
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    name: Patch chowlog robots.txt via Bridge SSH chain
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/lightsail_key
+          chmod 600 ~/.ssh/lightsail_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Patch robots.txt on chowlog (via Bridge → GCP SSH chain)
+        run: |
+          ssh -i ~/.ssh/lightsail_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            'set -e; \
+             cd /home/ubuntu/wp-bulk-generator/bridge-api; \
+             SECONDARY_HOST=$(grep ^SECONDARY_SERVER_HOST .env | cut -d= -f2); \
+             SECONDARY_USER=$(grep ^SECONDARY_SERVER_USER .env | cut -d= -f2); \
+             SECONDARY_KEY=$(grep ^SECONDARY_SERVER_KEY_PATH .env | cut -d= -f2); \
+             echo "Target: $SECONDARY_USER@$SECONDARY_HOST (key: $SECONDARY_KEY)"; \
+             sudo ssh -i "$SECONDARY_KEY" -o StrictHostKeyChecking=no "$SECONDARY_USER@$SECONDARY_HOST" \
+               "sudo sed -i '"'"'s|^Sitemap: http://|Sitemap: https://|g'"'"' /var/www/chowlog/robots.txt && sudo grep ^Sitemap: /var/www/chowlog/robots.txt"'
+
+      - name: Verify (HTTP fetch)
+        run: |
+          echo "=== /robots.txt Sitemap line ==="
+          curl -s https://chowlog.xyz/robots.txt | grep -i ^Sitemap: || echo "NO SITEMAP LINE"
