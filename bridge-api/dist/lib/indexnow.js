@@ -4,13 +4,36 @@
  * 지원 검색엔진: Bing, Yandex, Naver, Seznam, Yahoo 등
  * Spec: https://www.indexnow.org/
  *
+ * 키 해석 우선순위 (shell 스크립트와 공용하기 위해 다중 fallback):
+ *   1) INDEXNOW_API_KEY (Bridge 전용 env)
+ *   2) INDEXNOW_KEY     (deploy-wp-sites.sh 과 공용 env)
+ *   3) INDEXNOW_KEY_FILE 경로의 파일 (기본 /root/.wp-bulk-indexnow-key)
+ *
+ * 모든 서버(Primary/Secondary/Lightsail)가 같은 키를 공유해야 정상 동작.
+ *
  * 환경 변수:
- *   INDEXNOW_API_KEY  — 필수. 사이트 루트에 {key}.txt 파일도 존재해야 함
- *   INDEXNOW_ENABLED  — "false"로 설정하면 비활성화 (기본: true if key is set)
+ *   INDEXNOW_ENABLED — 2026-04-22 Bing 적극 제출 금지 방침으로 기본값 "false".
+ *                      활성화하려면 env 에 "true" 명시 필요.
  */
-const INDEXNOW_API_KEY = (process.env.INDEXNOW_API_KEY || "").trim();
+import { readFileSync } from "fs";
+function resolveIndexNowKey() {
+    const envKey = (process.env.INDEXNOW_API_KEY || process.env.INDEXNOW_KEY || "").trim();
+    if (envKey)
+        return envKey;
+    const keyFile = (process.env.INDEXNOW_KEY_FILE || "/root/.wp-bulk-indexnow-key").trim();
+    try {
+        const fileKey = readFileSync(keyFile, "utf-8").trim();
+        if (fileKey)
+            return fileKey;
+    }
+    catch {
+        // 파일 없으면 무시
+    }
+    return "";
+}
+const INDEXNOW_API_KEY = resolveIndexNowKey();
 const INDEXNOW_ENABLED = INDEXNOW_API_KEY.length > 0 &&
-    (process.env.INDEXNOW_ENABLED || "true").toLowerCase() !== "false";
+    (process.env.INDEXNOW_ENABLED || "false").toLowerCase() === "true";
 const INDEXNOW_ENDPOINT = "https://api.indexnow.org/indexnow";
 const INDEXNOW_TIMEOUT_MS = 10_000;
 export function isIndexNowEnabled() {

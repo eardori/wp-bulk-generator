@@ -13,7 +13,8 @@ function jobPath(id) {
     return join(DATA_DIR, `${id}.json`);
 }
 export function generateJobId() {
-    return randomBytes(8).toString("hex");
+    const timestamp = Date.now().toString(36);
+    return `${timestamp}-${randomBytes(4).toString("hex")}`;
 }
 export function createJob(input) {
     ensureDir();

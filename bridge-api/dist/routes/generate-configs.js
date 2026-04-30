@@ -5,7 +5,9 @@ import { fetchReservedSlugs } from "../lib/ec2-client.js";
 import { isExcludedSiteSlug } from "../lib/excluded-sites.js";
 const BATCH_SIZE = 10;
 const MAX_SLUG_LENGTH = 15;
-const GEMINI_CONFIG_MODEL = process.env.GEMINI_CONFIG_MODEL || "gemini-2.5-flash";
+// 2.5-flash는 503 과부하, 2.0-flash는 신규 사용자에게 단종. lite가 부하·가용성 모두 최적.
+const GEMINI_CONFIG_MODEL = process.env.GEMINI_CONFIG_MODEL || "gemini-2.5-flash-lite";
+const GEMINI_CONFIG_FALLBACK_MODEL = process.env.GEMINI_CONFIG_FALLBACK_MODEL || "gemini-2.5-flash";
 const LOCAL_RESERVED_PATHS = [
     process.env.CREDENTIALS_PATH || "/root/wp-sites-credentials.json",
     process.env.CONFIG_PATH || "/root/wp-sites-config.json",
@@ -84,10 +86,17 @@ async function callGeminiWithRetry(model, prompt, sendProgress) {
         }
         catch (err) {
             const msg = err instanceof Error ? err.message : "";
-            const isRateLimit = msg.includes("429") || msg.toLowerCase().includes("resource exhausted");
-            if (isRateLimit && attempt < 3) {
-                const delay = attempt * 20000; // 20s, 40s
-                sendProgress(`⏳ API 한도 초과 — ${delay / 1000}초 후 재시도 (${attempt}/3)...`);
+            const lower = msg.toLowerCase();
+            const isRateLimit = msg.includes("429") || lower.includes("resource exhausted");
+            // 503(Service Unavailable: high demand)·500도 일시적 장애로 간주해 재시도
+            const isTransient = msg.includes("503") || msg.includes("500")
+                || lower.includes("service unavailable")
+                || lower.includes("high demand");
+            const isRetryable = isRateLimit || isTransient;
+            if (isRetryable && attempt < 3) {
+                const delay = isTransient ? attempt * 10000 : attempt * 20000; // 503: 10/20s, 429: 20/40s
+                const label = isTransient ? "모델 과부하(503)" : "API 한도 초과(429)";
+                sendProgress(`⏳ ${label} — ${delay / 1000}초 후 재시도 (${attempt}/3)...`);
                 await new Promise((r) => setTimeout(r, delay));
             }
             else {

@@ -186,11 +186,10 @@ slug_selected() {
 site_url_for_domain() {
   local domain
   domain="$(normalize_domain "$1")"
-  if [[ "$domain" == *.allmyreview.site ]]; then
-    printf 'https://%s' "$domain"
-  else
-    printf 'http://%s' "$domain"
-  fi
+  # 2026-04-28 회귀 방지: 모든 사이트가 Let's Encrypt 자동 발급되므로 fallback 도 https.
+  # 이전: 비-allmyreview 도메인이 'http://' 로 떨어져서 robots.txt 의 Sitemap 줄이 http 로
+  # 생성됨. chowlog.xyz 에서 빙 인덱싱 지연 원인이었음.
+  printf 'https://%s' "$domain"
 }
 
 read_wp_config_value() {

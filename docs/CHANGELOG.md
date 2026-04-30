@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-04-28: chowlog robots.txt http→https 회귀 보정 + 1회성 패치 엔드포인트 추가
+
+- **문제 진단**: chowlog.xyz 가 빙 URL Inspection 에서 "Not Crawled" 상태로 머무는 직접 원인 발견. robots.txt 의 `Sitemap:` 줄이 `http://chowlog.xyz/sitemap_index.xml` 로 명시되어 있었음. 빙은 그 URL 그대로 호출 → 301 redirect → 신뢰도 하락 (redirected sitemap 은 후순위 처리). http→https siteurl 마이그레이션 시점에 robots.txt 만 회귀 안 됨.
+- **근본 원인**: `scripts/backfill-existing-sites.sh:site_url_for_domain` 이 비-allmyreview 도메인에 대해 `http://` 를 반환하던 옛 fallback 잔재. `deploy-wp-sites.sh` 는 2026-04-22 에 https fallback 으로 이미 수정됨.
+- **조치**:
+  - `scripts/backfill-existing-sites.sh:site_url_for_domain` 도 https fallback 으로 통일. 모든 사이트가 Let's Encrypt 자동 발급되므로 안전.
+  - `bridge-api/src/routes/deploy.ts`: 신규 엔드포인트 `POST /deploy/fix-robots-https` 추가. resolveSiteTarget 으로 사이트의 server target 결정 (primary/secondary/remote), 원격이면 execSsh, 로컬이면 execSync 로 `sed -i 's|^Sitemap: http://|Sitemap: https://|g' ${siteDir}/robots.txt` 실행. Sitemap 줄을 grep 으로 출력해 결과 검증. body: `{ slug }`.
+  - `admin/src/app/api/deploy/fix-robots-https/route.ts`: 동일 페이로드를 그대로 Bridge 로 forward 하는 thin proxy.
+- **다음 작업 (Hoon)**: CI 자동 배포 완료 후 트리거 `curl -sSk -X POST https://admin.allmyreview.site/api/deploy/fix-robots-https -d '{"slug":"chowlog"}' -H 'Content-Type: application/json'`. 이어서 `https://chowlog.xyz/robots.txt` 를 직접 확인하여 `Sitemap: https://...` 로 갱신됐는지 검증.
+
+## 2026-04-20: Bing 인덱싱 파이프라인 복구 — IndexNow 활성화 + SubmitUrlBatch 연결 + 일괄 재제출 엔드포인트
+
+- **문제 진단**: Bing URL Inspection에 글이 안 잡히는 원인 3가지 발견
+  1. Bridge의 `INDEXNOW_API_KEY` env 미설정 → `isIndexNowEnabled()=false`, IndexNow 호출이 한 번도 안 됐음
+  2. `deploy-wp-sites.sh`가 서버별로 랜덤 키 생성 → Primary/Secondary/Lightsail 서버 간 키 불일치 (교차 호출 시 403)
+  3. `submitBingUrls` (Bing SubmitUrlBatch API) 구현만 있고 호출처 없음 — sitemap 제출 외 직접 URL 제출 경로 없음
+- **조치**:
+  - `bridge-api/src/lib/indexnow.ts`: env 키 해석 우선순위 확장 (`INDEXNOW_API_KEY` → `INDEXNOW_KEY` → `/root/.wp-bulk-indexnow-key` 파일 fallback)
+  - `publish-articles.ts`: 발행 파이프라인에 `submitBingUrls` 추가 — IndexNow와 병렬로 두 경로 제출
+  - `.env.example` + `deploy-bridge.yml`: `INDEXNOW_API_KEY` GitHub Secret을 bridge `.env`에 sync + `/root/.wp-bulk-indexnow-key`도 동기화
+  - 신규 엔드포인트 `POST /deploy/resubmit-bing-urls` (Bridge) + `/api/deploy/resubmit-bing-urls` (admin 프록시): WP REST API로 기존 발행 글을 페이지네이션 수집 → `submitBingUrls` + `submitIndexNow` 일괄 재제출, SSE 스트리밍 진행률. body: `{ domainFilter?, slugs?, perSiteLimit? }`
+- **Hoon 후속 작업**:
+  - GitHub Secret `INDEXNOW_API_KEY` 등록 (값: `openssl rand -hex 16`)
+  - Bridge 재배포 → 키가 서버 `.env` + `/root/.wp-bulk-indexnow-key`로 전파
+  - `scripts/deploy-wp-sites.sh`를 필요한 서버에서 재실행해 각 WP 사이트 루트에 `{key}.txt` 파일 동기화 (기존 랜덤 키 덮어쓰기)
+  - 재제출 트리거: `curl -X POST https://admin.allmyreview.site/api/deploy/resubmit-bing-urls -d '{}' -H 'Content-Type: application/json'`
+
+## 2026-04-20: Redis 장애로 인한 발행 일괄 실패 — heal-redis 스크립트 추가
+
+- **증상**: 컨텐츠 발행 시 다수 사이트에서 `spawnSync wp ETIMEDOUT` 발생 (14/157개 실패 확인). 일부 사이트는 `RedisException: read error on connection to 127.0.0.1:6379` 명시적 에러 (`local-food`, `foodie-tales`). 나머지 ETIMEDOUT 사이트도 동일 원인(Redis 응답 대기 중 wp-cli hang)으로 추정
+- **근본 원인**: Lightsail Redis 서비스 crash/정지 → 각 사이트의 `wp-content/object-cache.php`가 부팅 중 Redis 연결 시도 → WP 로딩 자체가 멈춤 → wp-cli eval-file 명령이 Node spawnSync 타임아웃 초과
+- **조치**:
+  - `scripts/heal-redis.sh` 신규 추가: `systemctl restart redis-server` + PONG 헬스체크 + 선택 slug 대상 `object-cache.php` 임시 비활성화(`--restore`로 원복 가능)
+  - 즉시 완화 절차: 서버 SSH 접속 후 `sudo ./scripts/heal-redis.sh` 실행. Redis가 재기동 불능이면 동일 명령에 `local-food foodie-tales` 같은 문제 slug 를 인자로 넘겨 object-cache.php 만 비활성화
+- **Hoon 후속 작업**: Bridge publish-articles 경로에서 SSH fallback 타임아웃 상향 검토, Redis 모니터링/자동 복구 systemd override 추가 검토 (ADR 후보)
+
 ## 2026-04-19: Vercel DEPLOYMENT_DISABLED 임시 우회 — admin.allmyreview.site 개설
 
 - **상황**: `wp.multiful.ai`가 Vercel 402 `DEPLOYMENT_DISABLED`로 접속 불가 (계정 한도/결제 이슈, 해당 Vercel 계정이 Hoon 팀 아래 없어 CLI 해결 불가)
