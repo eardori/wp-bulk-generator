@@ -1,0 +1,94 @@
+[
+  {
+    "_comment": "TEMPLATE — domain 필드는 Hoon이 도메인 구매 후 채울 것. 예: gangnamtable.com / hanwoo-master.com",
+    "site_slug": "gnbiztable",
+    "domain": "TBD-OWN-DOMAIN-2.com",
+    "site_title": "강남 비즈니스 다이닝 — 박상무의 검증 기록",
+    "tagline": "4년간 200회 임원 접대로 검증한 강남 식당 — 비즈니스 컨텍스트로만 정리.",
+    "persona": {
+      "name": "박상무",
+      "age": 47,
+      "concern": "강남 비즈니스 다이닝 (임원 접대/거래처 미팅/회사 행사)",
+      "expertise": "대기업 영업 임원 20년차, 임원 접대 책임자",
+      "tone": "격식 + 분석. 비즈니스 어휘 (검증/리스크/예측 가능성). 절제된 솔직 영업 임원 톤.",
+      "bio": "청담 거주 15년, 대기업 영업 임원. 4년간 200회 이상 임원/거래처 접대로 강남 다이닝을 직급별/컨텍스트별로 정리합니다.",
+      "slug": "pjh-business"
+    },
+    "color_scheme": {
+      "primary": "#0F1A2E",
+      "secondary": "#F5F3EE",
+      "accent": "#8B6F3D",
+      "style": "executive"
+    },
+    "categories": [
+      "임원 접대",
+      "거래처 미팅",
+      "프라이빗룸",
+      "콜키지프리",
+      "청담",
+      "강남",
+      "삼성",
+      "역삼"
+    ],
+    "initial_post_topics": [
+      "청담 갈비 맛집 BEST 5 — 4년간 200회 접대로 검증한 1순위"
+    ],
+    "layout_preference": {
+      "homepage": "blog",
+      "sidebar": false,
+      "featured_image_style": "full-width"
+    },
+    "server_id": "secondary-tokyo",
+    "server_host": "TBD-VM-IP-1",
+    "server_user": "TBD-USER",
+    "server_key_path": "/root/.ssh/gcp_vm_key.pem",
+    "server_site_root": "/var/www",
+    "server_repo_root": "/home/TBD-USER/wp-bulk-generator"
+  },
+  {
+    "_comment": "TEMPLATE — 한우 미식 분석 도메인. 김셰프 페르소나.",
+    "site_slug": "hanwoomaster",
+    "domain": "TBD-OWN-DOMAIN-3.com",
+    "site_title": "한우 마스터 — 김셰프의 한우 분석 기록",
+    "tagline": "마블링 + 도축연령 + 숙성 일관성으로 검증한 강남 한우 — 셰프 시각의 객관 평가.",
+    "persona": {
+      "name": "김셰프",
+      "age": 41,
+      "concern": "한우 품질 분석 (등급/도축연령/숙성)",
+      "expertise": "前 호텔 한식당 셰프, 現 외식업 컨설턴트. 한우 도축장 견학 多.",
+      "tone": "미식 분석. 마블링 7+/도축연령 24개월/Wet vs Dry 같은 전문 용어. 셰프 경력 기반 객관성.",
+      "bio": "前 5성급 호텔 한식당 셰프 출신, 現 외식업 컨설턴트. 한우 도축장/원산지 검증 기반으로 강남 한우집을 품질로 평가합니다.",
+      "slug": "chefkim"
+    },
+    "color_scheme": {
+      "primary": "#1A0F08",
+      "secondary": "#FFFAF0",
+      "accent": "#A0522D",
+      "style": "editorial"
+    },
+    "categories": [
+      "한우 품질",
+      "마블링",
+      "도축연령",
+      "숙성",
+      "부위별",
+      "청담",
+      "강남",
+      "코스 vs 단품"
+    ],
+    "initial_post_topics": [
+      "청담 한우 BEST 5 — 마블링 + 도축연령 + 숙성 일관성 1순위"
+    ],
+    "layout_preference": {
+      "homepage": "blog",
+      "sidebar": false,
+      "featured_image_style": "full-width"
+    },
+    "server_id": "secondary-singapore",
+    "server_host": "TBD-VM-IP-2",
+    "server_user": "TBD-USER",
+    "server_key_path": "/root/.ssh/gcp_vm_key.pem",
+    "server_site_root": "/var/www",
+    "server_repo_root": "/home/TBD-USER/wp-bulk-generator"
+  }
+]
